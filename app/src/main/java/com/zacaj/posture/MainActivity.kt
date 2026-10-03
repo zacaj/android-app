@@ -71,7 +71,14 @@ class MainActivity : ComponentActivity() {
             Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Posture: ${status.posture.name.lowercase()}", style = MaterialTheme.typography.headlineMedium)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Posture: ${status.posture.name.lowercase()}", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "  v${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
             if (message.isNotEmpty()) {
                 Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
             }
@@ -124,6 +131,11 @@ class MainActivity : ComponentActivity() {
 
             HorizontalDivider()
             SettingsForm(s)
+            Text(
+                "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.GIT_SHA}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
     }
 

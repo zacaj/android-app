@@ -4,6 +4,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI sets GITHUB_RUN_NUMBER/GITHUB_SHA; local builds get 0 / "local".
+val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+val gitSha = System.getenv("GITHUB_SHA")?.take(7) ?: "local"
+
 android {
     namespace = "com.zacaj.posture"
     compileSdk = 35
@@ -12,15 +16,28 @@ android {
         applicationId = "com.zacaj.posture"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        // Offset keeps codes above the original hard-coded 1.
+        versionCode = 100 + buildNumber
+        versionName = "0.1.$buildNumber"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+    }
+
+    // Fixed, committed key so every build (CI or local) can update the installed app.
+    // Personal sideloaded app only — this key is public, don't reuse it for anything distributed.
+    signingConfigs {
+        create("personal") {
+            storeFile = file("posture.keystore")
+            storePassword = "posture"
+            keyAlias = "posture"
+            keyPassword = "posture"
+        }
     }
 
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("personal") }
         release {
             isMinifyEnabled = false
-            // Personal app: sign release with the debug key so it's installable as-is.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("personal")
         }
     }
 
@@ -29,7 +46,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {
