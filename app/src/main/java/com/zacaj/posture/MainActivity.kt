@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
                 val mins = if (status.since > 0) (System.currentTimeMillis() - status.since) / 60_000 else 0
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
                 Text("tilt %.0f° · motion %.2f".format(status.tiltDeg, status.motionStd))
+                Text(if (status.inPocket) "in pocket" else "out of pocket — detection paused")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (status.running) {

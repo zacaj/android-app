@@ -10,6 +10,7 @@ class TraceIOTest {
         val events = listOf(
             TraceEvent.Accel(1, Vec3(0.5f, 9.8f, -0.25f)),
             TraceEvent.Gyro(2, Vec3(0.01f, 0f, 0f)),
+            TraceEvent.Pocket(3, false),
             TraceEvent.Label(3, Posture.SITTING),
             TraceEvent.State(4, Posture.STANDING),
             TraceEvent.Note(5, "calibrated"),

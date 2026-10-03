@@ -30,6 +30,11 @@ class PostureStateMachine(private val config: DetectorConfig) {
         return out
     }
 
+    /** Drop any pending transition (e.g. phone left the pocket). */
+    fun clearCandidate() {
+        candidate = null
+    }
+
     fun tick(tMs: Long): List<DetectorEvent> {
         val limit = config.tooLongMs[state] ?: return emptyList()
         val dur = tMs - stateSince
@@ -48,9 +53,27 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
     var lastRaw: Posture? = null
         private set
 
+    /**
+     * Whether the phone is in a pocket (proximity covered). While out, orientation says nothing
+     * about posture: the state is frozen (too-long timers keep running) and the window is
+     * cleared on re-entry so pull-out/put-back motion isn't classified.
+     */
+    var inPocket: Boolean = true
+        private set
+
     val state get() = stateMachine.state
 
+    fun onPocket(tMs: Long, inPocket: Boolean): List<DetectorEvent> {
+        if (inPocket == this.inPocket) return emptyList()
+        this.inPocket = inPocket
+        classifier.reset()
+        stateMachine.clearCandidate()
+        lastRaw = null
+        return stateMachine.tick(tMs)
+    }
+
     fun onAccel(tMs: Long, accel: Vec3): List<DetectorEvent> {
+        if (!inPocket) return stateMachine.tick(tMs)
         lastRaw = classifier.add(tMs, accel)
         return stateMachine.onRaw(tMs, lastRaw)
     }

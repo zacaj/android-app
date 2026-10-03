@@ -21,6 +21,8 @@ Accelerometer at 25 Hz, 2 s sliding window:
 - otherwise the angle between mean gravity and the reference axis (phone long axis, or the
   calibrated standing vector), ignoring sign: ≤ 35° standing, ≥ 55° sitting, in between = no change
 - a new classification must persist `minDwellMs` (3–4 s) before the state changes
+- detection is paused while the proximity sensor is uncovered (phone out of the pocket): the state
+  is held, too-long timers keep running, and the window restarts when it goes back in
 
 Tunables are in `DetectorConfig` (`core/.../Model.kt`).
 
@@ -45,5 +47,5 @@ python3 tools/listener.py --port 8765     # LAN listener
 
 ## Trace format
 
-Gzipped CSV, `t_ms,kind,x,y,z`; kinds `a` (accel m/s²), `g` (gyro rad/s), `label`, `state`, `note`.
+Gzipped CSV, `t_ms,kind,x,y,z`; kinds `a` (accel m/s²), `g` (gyro rad/s), `pocket` (1/0), `label`, `state`, `note`.
 Files rotate every 30 min and upload hourly on unmetered networks (or via "upload now").

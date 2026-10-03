@@ -3,6 +3,8 @@ package com.zacaj.posture.core
 data class ReplayResult(
     /** Detector state after each accel sample. */
     val timeline: List<Pair<Long, Posture>>,
+    /** Accel sample times taken while the phone was out of the pocket (excluded from scoring). */
+    val outOfPocket: Set<Long> = emptySet(),
     val events: List<DetectorEvent>,
     val labels: List<TraceEvent.Label>,
 ) {
@@ -17,7 +19,7 @@ data class ReplayResult(
         var li = -1
         for ((t, s) in timeline) {
             while (li + 1 < labels.size && labels[li + 1].tMs <= t) li++
-            if (li < 0 || t - labels[li].tMs < graceMs) continue
+            if (li < 0 || t - labels[li].tMs < graceMs || t in outOfPocket) continue
             val key = labels[li].posture to s
             confusion[key] = (confusion[key] ?: 0) + 1
         }
@@ -56,17 +58,20 @@ object Replay {
         val timeline = ArrayList<Pair<Long, Posture>>()
         val events = ArrayList<DetectorEvent>()
         val labels = ArrayList<TraceEvent.Label>()
+        val outOfPocket = HashSet<Long>()
         for (e in trace.sortedBy { it.tMs }) {
             when (e) {
                 is TraceEvent.Accel -> {
                     events += detector.onAccel(e.tMs, e.v)
                     timeline += e.tMs to detector.state
+                    if (!detector.inPocket) outOfPocket += e.tMs
                 }
                 is TraceEvent.Gyro -> events += detector.onGyro(e.tMs, e.v)
+                is TraceEvent.Pocket -> events += detector.onPocket(e.tMs, e.inPocket)
                 is TraceEvent.Label -> labels += e
                 else -> {}
             }
         }
-        return ReplayResult(timeline, events, labels)
+        return ReplayResult(timeline, outOfPocket, events, labels)
     }
 }

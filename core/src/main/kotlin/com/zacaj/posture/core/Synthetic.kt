@@ -42,6 +42,19 @@ class SyntheticTrace(seed: Long = 1, private val hz: Int = 25, startMs: Long = 1
         return this
     }
 
+    /** Phone held in hand: screen facing up-ish, wobbling; pocket out/in events around it. */
+    fun inHand(durationMs: Long): SyntheticTrace {
+        events += TraceEvent.Pocket(t, false)
+        val dt = 1000L / hz
+        val end = t + durationMs
+        while (t < end) {
+            events += TraceEvent.Accel(t, Vec3(0.3f, 8.5f, 4.8f) + noise(0.6f))
+            t += dt
+        }
+        events += TraceEvent.Pocket(t, true)
+        return this
+    }
+
     private fun noise(sd: Float) = Vec3(gauss(sd), gauss(sd), gauss(sd))
     private fun gauss(sd: Float): Float {
         val u1 = rnd.nextDouble().coerceAtLeast(1e-9)

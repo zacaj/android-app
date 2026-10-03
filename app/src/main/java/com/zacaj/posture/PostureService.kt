@@ -36,6 +36,7 @@ data class Status(
     val raw: Posture? = null,
     val tiltDeg: Float = Float.NaN,
     val motionStd: Float = 0f,
+    val inPocket: Boolean = true,
 )
 
 class PostureService : Service(), SensorEventListener {
@@ -116,13 +117,19 @@ class PostureService : Service(), SensorEventListener {
         sensors.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let {
             sensors.registerListener(this, it, periodUs, batchUs, handler)
         }
+        // On-change sensor; prefer the wake-up variant so pocket changes aren't delayed by batching.
+        (sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY, true) ?: sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY))
+            ?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 0, handler) }
+            ?: Log.w(TAG, "no proximity sensor; assuming always in pocket")
         UploadWorker.schedule(this)
         _status.value = _status.value.copy(running = true)
     }
 
     private fun reloadConfig() {
         handler.post {
+            val wasInPocket = detector.inPocket
             detector = PostureDetector(settings.detectorConfig())
+            detector.onPocket(System.currentTimeMillis(), wasInPocket)
             Log.i(TAG, "config ${detector.config}")
         }
     }
@@ -143,7 +150,7 @@ class PostureService : Service(), SensorEventListener {
 
     override fun onSensorChanged(e: SensorEvent) {
         val t = bootEpochMs + e.timestamp / 1_000_000
-        val v = Vec3(e.values[0], e.values[1], e.values[2])
+        val v = if (e.values.size >= 3) Vec3(e.values[0], e.values[1], e.values[2]) else Vec3.ZERO
         when (e.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
                 recorder?.write(TraceEvent.Accel(t, v))
@@ -161,6 +168,15 @@ class PostureService : Service(), SensorEventListener {
                 }
             }
             Sensor.TYPE_GYROSCOPE -> recorder?.write(TraceEvent.Gyro(t, v))
+            Sensor.TYPE_PROXIMITY -> {
+                val near = e.values[0] < e.sensor.maximumRange
+                if (near != detector.inPocket) {
+                    Log.i(TAG, "pocket ${if (near) "in" else "out"}")
+                    recorder?.write(TraceEvent.Pocket(t, near))
+                    detector.onPocket(t, near).forEach(::handle)
+                    _status.value = _status.value.copy(inPocket = near)
+                }
+            }
         }
     }
 

@@ -24,6 +24,9 @@ adb root > /dev/null; sleep 2; adb wait-for-device
 adb install -r -g "$APK"
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 
+prox() { adb emu sensor set proximity "$1" > /dev/null; }
+
+prox 0           # covered = in pocket
 accel 0:9.81:0   # standing: gravity along the phone's long axis
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.CONFIGURE \
     --es lanUrl "http://10.0.2.2:$PORT" --ez notifyOnChange true
@@ -53,6 +56,19 @@ wait $WALK || true
 
 accel 0:9.81:0
 wait_for STANDING 20
+
+# Out of pocket: holding the phone at a "sitting" angle must not change state.
+prox 5
+sleep 1
+accel 0:1.5:9.7
+sleep 10
+if grep -q '"to": "SITTING"' <(tail -n 1 "$OUT/events.jsonl"); then
+    echo "FAIL: state changed while out of pocket"; exit 1
+fi
+echo "held STANDING while out of pocket"
+accel 0:9.81:0
+prox 0
+sleep 2
 
 # Recorder: flush and confirm a trace file was written with accel rows.
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.FLUSH

@@ -9,6 +9,7 @@ import java.util.zip.GZIPInputStream
 /**
  * Trace format: CSV, one event per line, `t_ms,kind,x,y,z`.
  *  - `a` accelerometer (m/s^2), `g` gyroscope (rad/s)
+ *  - `pocket` 1 = in pocket (proximity covered), 0 = out, in x
  *  - `label` ground truth posture in x (user-entered), `state` detector state in x, `note` free text in x
  * Lines starting with `#` are comments.
  */
@@ -16,6 +17,7 @@ sealed interface TraceEvent {
     val tMs: Long
     data class Accel(override val tMs: Long, val v: Vec3) : TraceEvent
     data class Gyro(override val tMs: Long, val v: Vec3) : TraceEvent
+    data class Pocket(override val tMs: Long, val inPocket: Boolean) : TraceEvent
     data class Label(override val tMs: Long, val posture: Posture) : TraceEvent
     data class State(override val tMs: Long, val posture: Posture) : TraceEvent
     data class Note(override val tMs: Long, val text: String) : TraceEvent
@@ -52,6 +54,7 @@ object TraceIO {
         return when (p[1]) {
             "a" -> TraceEvent.Accel(t, v())
             "g" -> TraceEvent.Gyro(t, v())
+            "pocket" -> TraceEvent.Pocket(t, p[2].trim() == "1")
             "label" -> runCatching { Posture.valueOf(p[2]) }.getOrNull()?.let { TraceEvent.Label(t, it) }
             "state" -> runCatching { Posture.valueOf(p[2]) }.getOrNull()?.let { TraceEvent.State(t, it) }
             "note" -> TraceEvent.Note(t, p.drop(2).joinToString(",").trimEnd(','))
@@ -62,6 +65,7 @@ object TraceIO {
     fun format(e: TraceEvent): String = when (e) {
         is TraceEvent.Accel -> "${e.tMs},a,${e.v.x},${e.v.y},${e.v.z}"
         is TraceEvent.Gyro -> "${e.tMs},g,${e.v.x},${e.v.y},${e.v.z}"
+        is TraceEvent.Pocket -> "${e.tMs},pocket,${if (e.inPocket) 1 else 0},,"
         is TraceEvent.Label -> "${e.tMs},label,${e.posture},,"
         is TraceEvent.State -> "${e.tMs},state,${e.posture},,"
         is TraceEvent.Note -> "${e.tMs},note,${e.text.replace('\n', ' ')},,"

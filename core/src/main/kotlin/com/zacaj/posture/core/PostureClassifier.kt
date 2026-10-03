@@ -18,6 +18,11 @@ class PostureClassifier(private val config: DetectorConfig) {
     var tiltDeg: Float = Float.NaN
         private set
 
+    fun reset() {
+        times.clear()
+        samples.clear()
+    }
+
     /** Returns null while the window is filling or when in the sit/stand dead band. */
     fun add(tMs: Long, accel: Vec3): Posture? {
         times.addLast(tMs)

@@ -66,3 +66,36 @@ class DetectorTest {
         assertEquals(listOf(Posture.STANDING, Posture.SITTING), transitions(Replay.run(trace, config)))
     }
 }
+
+class PocketTest {
+    @Test
+    fun `using the phone while sitting keeps sitting`() {
+        val gen = SyntheticTrace(seed = 6)
+            .segment(Posture.SITTING, 20_000)
+            .inHand(60_000)
+            .segment(Posture.SITTING, 20_000, label = false)
+        val r = Replay.run(gen.events)
+        assertEquals(
+            listOf(Posture.SITTING),
+            r.events.filterIsInstance<DetectorEvent.StateChanged>().map { it.to },
+        )
+    }
+
+    @Test
+    fun `without pocket events the same data would flip state`() {
+        val gen = SyntheticTrace(seed = 6)
+            .segment(Posture.SITTING, 20_000)
+            .inHand(60_000)
+        val trace = gen.events.filter { it !is TraceEvent.Pocket }
+        val r = Replay.run(trace)
+        assertTrue(r.events.filterIsInstance<DetectorEvent.StateChanged>().size > 1)
+    }
+
+    @Test
+    fun `too long timer keeps running while out of pocket`() {
+        val config = DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 60_000))
+        val gen = SyntheticTrace(seed = 7).segment(Posture.SITTING, 20_000).inHand(60_000)
+        val alerts = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
+        assertEquals(1, alerts.size)
+    }
+}
