@@ -12,15 +12,16 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 python3 tools/listener.py --port $PORT --out "$OUT" > "$OUT/listener.log" 2>&1 &
 LISTENER=$!
-adb logcat -c || true
-adb logcat -v time Posture:V PostureNet:V AndroidRuntime:E '*:S' > "$OUT/logcat.txt" &
-LOGCAT=$!
-trap 'kill $LISTENER $LOGCAT 2>/dev/null || true' EXIT
+trap 'kill $LISTENER ${LOGCAT:-} 2>/dev/null || true' EXIT
 
 accel() { adb emu sensor set acceleration "$1" > /dev/null; }
 
 # Root lets the shell start the (non-exported) service directly.
 adb root > /dev/null; sleep 2; adb wait-for-device
+# Start logcat after root: restarting adbd kills an earlier stream.
+adb logcat -c || true
+adb logcat -v time Posture:V PostureNet:V AndroidRuntime:E '*:S' > "$OUT/logcat.txt" &
+LOGCAT=$!
 adb install -r -g "$APK"
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS || true
 
