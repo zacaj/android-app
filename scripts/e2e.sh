@@ -57,7 +57,7 @@ wait_for STANDING 20
 # Recorder: flush and confirm a trace file was written with accel rows.
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.FLUSH
 sleep 3
-adb shell run-as $PKG sh -c 'ls files/traces/ready files/traces/uploaded 2>/dev/null' | tee "$OUT/trace-files.txt"
+adb shell "run-as $PKG ls files/traces/ready files/traces/uploaded 2>/dev/null" | tee "$OUT/trace-files.txt"
 grep -q 'trace-.*\.csv\.gz' "$OUT/trace-files.txt" || { echo "FAIL: no trace file"; exit 1; }
 
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.STOP
