@@ -56,12 +56,21 @@ class Settings(context: Context) {
             else { putFloat("refX", v.x); putFloat("refY", v.y); putFloat("refZ", v.z) }
         }
 
+    var sittingAxis: Vec3?
+        get() = if (!p.contains("sitX")) null
+        else Vec3(p.getFloat("sitX", 0f), p.getFloat("sitY", 0f), p.getFloat("sitZ", 1f))
+        set(v) = p.edit {
+            if (v == null) { remove("sitX"); remove("sitY"); remove("sitZ") }
+            else { putFloat("sitX", v.x); putFloat("sitY", v.y); putFloat("sitZ", v.z) }
+        }
+
     val deviceName: String get() = Build.MODEL.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     fun detectorConfig(): DetectorConfig {
         val base = DetectorConfig()
         return base.copy(
             referenceAxis = referenceAxis ?: base.referenceAxis,
+            sittingAxis = sittingAxis,
             tooLongMs = Posture.entries.mapNotNull { s ->
                 limitMin(s).takeIf { it > 0 }?.let { s to it * 60_000L }
             }.toMap(),

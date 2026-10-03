@@ -99,3 +99,60 @@ class PocketTest {
         assertEquals(1, alerts.size)
     }
 }
+
+class CalibrationTest {
+    @Test
+    fun `two-point calibration handles a shallow sitting angle`() {
+        // Pocket where sitting only tilts ~40° from standing: fixed thresholds can't see it.
+        val gen = SyntheticTrace(seed = 8)
+        gen.standingGravity = Vec3(0f, 9.8f, 0f)
+        gen.sittingGravity = Vec3(0f, 7.5f, 6.3f)
+        val trace = gen.segment(Posture.STANDING, 15_000).segment(Posture.SITTING, 15_000).events
+        val uncalibrated = Replay.run(trace).events.filterIsInstance<DetectorEvent.StateChanged>().map { it.to }
+        assertEquals(listOf(Posture.STANDING), uncalibrated)
+
+        val config = DetectorConfig(referenceAxis = Vec3(0f, 9.8f, 0f), sittingAxis = Vec3(0f, 7.5f, 6.3f))
+        val calibrated = Replay.run(trace, config).events.filterIsInstance<DetectorEvent.StateChanged>().map { it.to }
+        assertEquals(listOf(Posture.STANDING, Posture.SITTING), calibrated)
+    }
+
+    @Test
+    fun `calibration sample rejects movement`() {
+        val still = SyntheticTrace(seed = 9).segment(Posture.STANDING, 5_000).events
+            .filterIsInstance<TraceEvent.Accel>().map { it.v }
+        val moving = SyntheticTrace(seed = 9).segment(Posture.WALKING, 5_000).events
+            .filterIsInstance<TraceEvent.Accel>().map { it.v }
+        assertTrue(CalibrationSample.of(still).ok)
+        assertTrue(!CalibrationSample.of(moving).ok)
+    }
+}
+
+class PocketFlickerTest {
+    @Test
+    fun `proximity flicker in pocket does not pause detection`() {
+        val gen = SyntheticTrace(seed = 10).segment(Posture.STANDING, 10_000)
+        // flicker out/in every ~400ms for 6s, while actually sitting down
+        val flickerStart = gen.events.last().tMs
+        gen.segment(Posture.SITTING, 20_000, label = true)
+        val flicker = (0 until 15).flatMap { i ->
+            val t = flickerStart + i * 400
+            listOf(TraceEvent.Pocket(t, false), TraceEvent.Pocket(t + 200, true))
+        }
+        val r = Replay.run(gen.events + flicker)
+        assertEquals(
+            listOf(Posture.STANDING, Posture.SITTING),
+            r.events.filterIsInstance<DetectorEvent.StateChanged>().map { it.to },
+        )
+        assertTrue(r.outOfPocket.isEmpty())
+    }
+}
+
+class RestoreTest {
+    @Test
+    fun `restored state does not re-emit`() {
+        val sm = PostureStateMachine(DetectorConfig())
+        sm.restore(Posture.SITTING, 1000)
+        val ev = (0..100).flatMap { sm.onRaw(2000L + it * 40, Posture.SITTING) }
+        assertTrue(ev.none { it is DetectorEvent.StateChanged })
+    }
+}

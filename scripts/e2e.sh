@@ -70,6 +70,14 @@ accel 0:9.81:0
 prox 0
 sleep 2
 
+# Calibration: arm while in pocket (8s lead-in), hold a sitting pose, expect success.
+adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.CALIBRATE --es label SITTING
+accel 0:1.5:9.7
+for _ in $(seq 25); do grep -q "Calibrated sitting" "$OUT/logcat.txt" && break; sleep 1; done
+grep -q "Calibrated sitting" "$OUT/logcat.txt" || { echo "FAIL: calibration did not complete"; exit 1; }
+echo "calibration OK"
+wait_for SITTING 20
+
 # Recorder: flush and confirm a trace file was written with accel rows.
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.FLUSH
 sleep 3

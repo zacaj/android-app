@@ -26,6 +26,32 @@ sealed interface DetectorEvent {
     data class TooLong(override val tMs: Long, val state: Posture, val durationMs: Long) : DetectorEvent
 }
 
+/** Sign-agnostic angle in degrees between two vectors; NaN if either is zero. */
+fun axisAngleDeg(a: Vec3, b: Vec3): Float {
+    val denom = a.norm() * b.norm()
+    if (denom == 0f) return Float.NaN
+    val c = (kotlin.math.abs(a.dot(b)) / denom).coerceIn(0f, 1f)
+    return Math.toDegrees(kotlin.math.acos(c.toDouble())).toFloat()
+}
+
+/** Result of averaging a still calibration sample. */
+data class CalibrationSample(val gravity: Vec3, val magnitudeStd: Float, val count: Int) {
+    /** Usable if enough samples, roughly 1g, and not moving. */
+    val ok get() = count >= 20 && gravity.norm() in 7f..12.5f && magnitudeStd < 0.6f
+
+    companion object {
+        fun of(samples: List<Vec3>): CalibrationSample {
+            if (samples.isEmpty()) return CalibrationSample(Vec3.ZERO, Float.NaN, 0)
+            var sum = Vec3.ZERO
+            for (s in samples) sum += s
+            val mags = samples.map { it.norm() }
+            val mean = mags.average()
+            val std = kotlin.math.sqrt(mags.sumOf { (it - mean) * (it - mean) } / mags.size).toFloat()
+            return CalibrationSample(sum * (1f / samples.size), std, samples.size)
+        }
+    }
+}
+
 data class DetectorConfig(
     /** Sliding window used for gravity estimate and motion energy. */
     val windowMs: Long = 2000,
@@ -40,6 +66,14 @@ data class DetectorConfig(
      * calibrating sets it to the measured gravity vector.
      */
     val referenceAxis: Vec3 = Vec3.Y,
+    /**
+     * Calibrated phone-frame gravity when sitting. When set, sit vs stand is decided by which
+     * reference gravity is closer, with [referenceMarginDeg] of dead band, instead of fixed angles.
+     */
+    val sittingAxis: Vec3? = null,
+    val referenceMarginDeg: Float = 10f,
+    /** Proximity "uncovered" must last this long to count as out of pocket (it flickers in pockets). */
+    val pocketOutDebounceMs: Long = 1500,
     /** How long a new raw classification must persist before the state changes. */
     val minDwellMs: Map<Posture, Long> = mapOf(
         Posture.SITTING to 4000,

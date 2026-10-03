@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -46,7 +47,9 @@ class MainActivity : ComponentActivity() {
         val settings = Settings(this)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(Modifier.fillMaxSize()) { Screen(settings) }
+                Surface(Modifier.fillMaxSize()) {
+                    Column(Modifier.safeDrawingPadding()) { Screen(settings) }
+                }
             }
         }
     }
@@ -63,11 +66,15 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Screen(s: Settings) {
         val status by PostureService.status.collectAsState()
+        val message by Feedback.message.collectAsState()
         Column(
             Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Posture: ${status.posture.name.lowercase()}", style = MaterialTheme.typography.headlineMedium)
+            if (message.isNotEmpty()) {
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            }
             if (status.running) {
                 val mins = if (status.since > 0) (System.currentTimeMillis() - status.since) / 60_000 else 0
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
@@ -83,8 +90,22 @@ class MainActivity : ComponentActivity() {
                         PostureService.send(this@MainActivity, PostureService.ACTION_START)
                     }) { Text("Start") }
                 }
-                OutlinedButton({ PostureService.send(this@MainActivity, PostureService.ACTION_CALIBRATE) }) {
-                    Text("Calibrate (stand)")
+            }
+            Text("Calibrate: tap, then pocket the phone and hold still. Buzz = recording, double buzz = done.")
+            status.calibration?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (status.calibration != null) {
+                    OutlinedButton({ PostureService.send(this@MainActivity, PostureService.ACTION_CALIBRATE_CANCEL) }) {
+                        Text("Cancel calibration")
+                    }
+                } else {
+                    listOf(Posture.STANDING, Posture.SITTING).forEach { p ->
+                        OutlinedButton({
+                            PostureService.send(this@MainActivity, PostureService.ACTION_CALIBRATE) {
+                                putExtra(PostureService.EXTRA_LABEL, p.name)
+                            }
+                        }) { Text("Calibrate ${p.name.lowercase()}") }
+                    }
                 }
             }
             Text("Label what you're doing now:")
@@ -143,9 +164,16 @@ class MainActivity : ComponentActivity() {
             s.githubToken = token
             if (PostureService.status.value.running) {
                 PostureService.send(this@MainActivity, PostureService.ACTION_RELOAD)
+            } else {
+                Feedback.show(this@MainActivity, "Settings saved")
             }
         }) { Text("Save") }
-        OutlinedButton({ s.referenceAxis = null; PostureService.send(this, PostureService.ACTION_RELOAD) }) {
+        OutlinedButton({
+            s.referenceAxis = null
+            s.sittingAxis = null
+            if (PostureService.status.value.running) PostureService.send(this, PostureService.ACTION_RELOAD)
+            Feedback.show(this, "Calibration reset to defaults")
+        }) {
             Text("Reset calibration")
         }
     }

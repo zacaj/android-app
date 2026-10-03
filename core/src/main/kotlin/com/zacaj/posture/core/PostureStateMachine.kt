@@ -30,6 +30,12 @@ class PostureStateMachine(private val config: DetectorConfig) {
         return out
     }
 
+    /** Carry state over from a previous instance (config reload) without emitting a change. */
+    fun restore(state: Posture, since: Long) {
+        this.state = state
+        stateSince = since
+    }
+
     /** Drop any pending transition (e.g. phone left the pocket). */
     fun clearCandidate() {
         candidate = null
@@ -63,7 +69,26 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
 
     val state get() = stateMachine.state
 
+    /** Raw proximity reading; out-of-pocket only takes effect after [DetectorConfig.pocketOutDebounceMs]. */
+    private var pendingOutSince: Long? = null
+
     fun onPocket(tMs: Long, inPocket: Boolean): List<DetectorEvent> {
+        if (inPocket) {
+            pendingOutSince = null
+            return setPocket(tMs, true)
+        }
+        if (this.inPocket && pendingOutSince == null) pendingOutSince = tMs
+        return checkPendingOut(tMs)
+    }
+
+    private fun checkPendingOut(tMs: Long): List<DetectorEvent> {
+        val since = pendingOutSince ?: return emptyList()
+        if (tMs - since < config.pocketOutDebounceMs) return emptyList()
+        pendingOutSince = null
+        return setPocket(tMs, false)
+    }
+
+    private fun setPocket(tMs: Long, inPocket: Boolean): List<DetectorEvent> {
         if (inPocket == this.inPocket) return emptyList()
         this.inPocket = inPocket
         classifier.reset()
@@ -73,6 +98,8 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
     }
 
     fun onAccel(tMs: Long, accel: Vec3): List<DetectorEvent> {
+        val pocketEvents = checkPendingOut(tMs)
+        if (pocketEvents.isNotEmpty()) return pocketEvents
         if (!inPocket) return stateMachine.tick(tMs)
         lastRaw = classifier.add(tMs, accel)
         return stateMachine.onRaw(tMs, lastRaw)

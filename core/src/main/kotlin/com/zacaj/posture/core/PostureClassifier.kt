@@ -1,7 +1,5 @@
 package com.zacaj.posture.core
 
-import kotlin.math.abs
-import kotlin.math.acos
 import kotlin.math.sqrt
 
 /** Instantaneous (un-debounced) classification from a sliding accelerometer window. */
@@ -47,14 +45,20 @@ class PostureClassifier(private val config: DetectorConfig) {
         val mean = magSum / n
         magnitudeStd = sqrt((magSq / n - mean * mean).coerceAtLeast(0.0)).toFloat()
 
-        val ref = config.referenceAxis
-        val denom = gravity.norm() * ref.norm()
-        tiltDeg = if (denom == 0f) Float.NaN
-        else Math.toDegrees(acos((abs(gravity.dot(ref)) / denom).coerceIn(0f, 1f).toDouble())).toFloat()
+        tiltDeg = axisAngleDeg(gravity, config.referenceAxis)
+        val sit = config.sittingAxis
 
         return when {
             magnitudeStd >= config.walkStdThreshold -> Posture.WALKING
             tiltDeg.isNaN() -> null
+            sit != null -> {
+                val sitDeg = axisAngleDeg(gravity, sit)
+                when {
+                    tiltDeg + config.referenceMarginDeg <= sitDeg -> Posture.STANDING
+                    sitDeg + config.referenceMarginDeg <= tiltDeg -> Posture.SITTING
+                    else -> null
+                }
+            }
             tiltDeg <= config.standMaxDeg -> Posture.STANDING
             tiltDeg >= config.sitMinDeg -> Posture.SITTING
             else -> null

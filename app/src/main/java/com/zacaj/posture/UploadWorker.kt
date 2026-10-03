@@ -27,22 +27,47 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val done = File(root, "uploaded").apply { mkdirs() }
         val github = s.githubToken.isNotBlank() && s.githubRepo.isNotBlank()
         val lan = s.lanTraceUpload && s.lanUrl.isNotBlank()
-        if (!github && !lan) return@withContext Result.success()
+        val ctx = applicationContext
+        if (!github && !lan) {
+            if (ready.isNotEmpty()) Feedback.show(ctx, "${ready.size} trace(s) waiting; no upload target configured", error = true)
+            return@withContext Result.success()
+        }
+        if (ready.isEmpty()) {
+            Feedback.show(ctx, "Nothing to upload")
+            return@withContext Result.success()
+        }
 
         var failed = false
+        var uploaded = 0
+        var lastError = ""
         for (f in ready) {
             val bytes = f.readBytes()
-            val ok = (!github || uploadGitHub(s, f.name, bytes)) &&
-                (!lan || Net.request("POST", "${s.lanUrl}/trace/${f.name}", bytes, "application/gzip") in 200..299)
-            if (ok) f.renameTo(File(done, f.name)) else failed = true
+            val err = (if (github) uploadGitHub(s, f.name, bytes) else null)
+                ?: (if (lan) uploadLan(s, f.name, bytes) else null)
+            if (err == null) {
+                f.renameTo(File(done, f.name)); uploaded++
+            } else {
+                failed = true; lastError = err
+            }
         }
+        if (failed) Feedback.show(ctx, "Uploaded $uploaded/${ready.size} traces; failed: $lastError", error = true)
+        else Feedback.show(ctx, "Uploaded $uploaded trace(s)")
         // Keep a week of uploaded traces on-device.
         val cutoff = System.currentTimeMillis() - 7 * 24 * 3600_000L
         done.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
         if (failed) Result.retry() else Result.success()
     }
 
-    private fun uploadGitHub(s: Settings, name: String, bytes: ByteArray): Boolean {
+    /** Returns null on success, else an error description. */
+    private fun uploadLan(s: Settings, name: String, bytes: ByteArray): String? = try {
+        val code = Net.request("POST", "${s.lanUrl}/trace/$name", bytes, "application/gzip")
+        if (code in 200..299) null else "LAN HTTP $code"
+    } catch (e: Exception) {
+        "LAN ${e.javaClass.simpleName}: ${e.message}"
+    }
+
+    /** Returns null on success, else an error description. */
+    private fun uploadGitHub(s: Settings, name: String, bytes: ByteArray): String? {
         val path = "traces/${s.deviceName}/$name"
         val body = JSONObject()
             .put("message", "trace $name")
@@ -55,10 +80,17 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 mapOf("Authorization" to "Bearer ${s.githubToken}", "Accept" to "application/vnd.github+json"),
             )
         } catch (e: Exception) {
-            Log.w("UploadWorker", "github upload failed: $e"); return false
+            Log.w("UploadWorker", "github upload failed: $e")
+            return "GitHub ${e.javaClass.simpleName}: ${e.message}"
         }
         // 422 = file already exists (previous attempt succeeded but we didn't hear back)
-        return code in 200..299 || code == 422
+        return when (code) {
+            in 200..299, 422 -> null
+            401 -> "GitHub 401: bad token"
+            403 -> "GitHub 403: token lacks Contents write on ${s.githubRepo}"
+            404 -> "GitHub 404: repo or branch '${s.githubBranch}' not found (or token can't see it)"
+            else -> "GitHub HTTP $code"
+        }
     }
 
     companion object {

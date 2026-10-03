@@ -1,5 +1,6 @@
 package com.zacaj.posture
 
+import android.content.Context
 import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
@@ -9,15 +10,17 @@ object Net {
     private const val TAG = "PostureNet"
     private val executor = Executors.newSingleThreadExecutor()
 
-    /** Fire-and-forget JSON POST. */
-    fun postAsync(url: String, json: String) {
+    /** Fire-and-forget JSON POST; failures surface as (throttled) feedback. */
+    fun postAsync(ctx: Context, url: String, json: String) {
         executor.execute {
-            try {
+            val err = try {
                 val code = request("POST", url, json.toByteArray(), "application/json")
                 Log.i(TAG, "POST $url -> $code")
+                if (code in 200..299) null else "HTTP $code"
             } catch (e: Exception) {
-                Log.w(TAG, "POST $url failed: $e")
+                e.toString()
             }
+            if (err != null) Feedback.showThrottled(ctx, "lan-post", "LAN post to $url failed: $err")
         }
     }
 

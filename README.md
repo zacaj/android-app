@@ -39,7 +39,9 @@ python3 tools/listener.py --port 8765     # LAN listener
 
 1. Install the APK (CI artifact `app-debug`, or `adb install`). Start → allow notifications and
    the battery-optimization exemption.
-2. With the phone in your pocket, stand still and tap **Calibrate (stand)**.
+2. Tap **Calibrate standing**, pocket the phone and stand still: it buzzes 3s after going in,
+   records 5s, then double-buzzes (long buzz = moved, try again). Repeat with **Calibrate sitting**
+   — with both, sit/stand is decided by whichever calibrated pose is closer.
 3. Settings: LAN listener URL, alert thresholds, and optionally a GitHub fine-grained token
    (Contents: read/write on this repo) to upload traces to the `traces` branch.
 4. Use the ongoing notification's sitting/standing/walking buttons to label ground truth — labels

@@ -20,6 +20,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.zacaj.posture.core.CalibrationSample
 import com.zacaj.posture.core.DetectorEvent
 import com.zacaj.posture.core.Posture
 import com.zacaj.posture.core.PostureDetector
@@ -37,6 +38,8 @@ data class Status(
     val tiltDeg: Float = Float.NaN,
     val motionStd: Float = 0f,
     val inPocket: Boolean = true,
+    /** Calibration progress text, null when idle. */
+    val calibration: String? = null,
 )
 
 class PostureService : Service(), SensorEventListener {
@@ -49,6 +52,14 @@ class PostureService : Service(), SensorEventListener {
     @Volatile private var detector = PostureDetector()
     private var lastStatusAt = 0L
     private var started = false
+    private var hasProximity = false
+    private var proximityNear = true
+
+    // Calibration (sensor thread only): armed -> pocket in -> 3s delay -> record 5s -> save
+    private var calibTarget: Posture? = null
+    private var calibSamples: MutableList<Vec3>? = null
+    private val calibStart = Runnable { beginCalibrationRecording() }
+    private val calibFinish = Runnable { finishCalibration() }
 
     /** sensor timestamps are elapsedRealtimeNanos; convert to epoch ms */
     private val bootEpochMs get() = System.currentTimeMillis() - SystemClock.elapsedRealtime()
@@ -70,7 +81,10 @@ class PostureService : Service(), SensorEventListener {
             this, NOTIF_ONGOING, ongoingNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
         )
         when (intent?.action) {
-            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_STOP -> {
+                Feedback.show(this, "Tracking stopped")
+                stopSelf(); return START_NOT_STICKY
+            }
             ACTION_CONFIGURE -> {
                 intent.getStringExtra("lanUrl")?.let { settings.lanUrl = it }
                 if (intent.hasExtra("notifyOnChange")) {
@@ -78,24 +92,28 @@ class PostureService : Service(), SensorEventListener {
                 }
                 reloadConfig()
             }
-            ACTION_RELOAD -> reloadConfig()
+            ACTION_RELOAD -> {
+                reloadConfig()
+                if (started) Feedback.show(this, "Settings applied to running tracker")
+            }
             ACTION_LABEL -> intent.getStringExtra(EXTRA_LABEL)?.let { l ->
                 runCatching { Posture.valueOf(l) }.getOrNull()?.let { p ->
                     handler.post { recorder?.write(TraceEvent.Label(System.currentTimeMillis(), p)) }
+                    Feedback.show(this, if (recorder != null || !started) "Labeled ${p.name.lowercase()}"
+                        else "Labeled ${p.name.lowercase()} (recording is off, label not saved)")
                 }
             }
-            ACTION_CALIBRATE -> handler.post {
-                val g = detector.classifier.gravity
-                if (g.norm() > 5f) {
-                    settings.referenceAxis = g
-                    recorder?.write(TraceEvent.Note(System.currentTimeMillis(), "calibrated ${g.x} ${g.y} ${g.z}"))
-                    recorder?.write(TraceEvent.Label(System.currentTimeMillis(), Posture.STANDING))
-                    reloadConfig()
-                }
+            ACTION_CALIBRATE -> {
+                val target = intent.getStringExtra(EXTRA_LABEL)
+                    ?.let { runCatching { Posture.valueOf(it) }.getOrNull() } ?: Posture.STANDING
+                handler.post { armCalibration(target) }
             }
+            ACTION_CALIBRATE_CANCEL -> handler.post { cancelCalibration("Calibration cancelled") }
             ACTION_FLUSH -> handler.post {
+                val had = recorder != null
                 recorder?.close()
                 UploadWorker.runNow(this)
+                Feedback.show(this, if (had) "Trace closed; uploading…" else "Uploading pending traces…")
             }
         }
         if (!started) start()
@@ -118,18 +136,23 @@ class PostureService : Service(), SensorEventListener {
             sensors.registerListener(this, it, periodUs, batchUs, handler)
         }
         // On-change sensor; prefer the wake-up variant so pocket changes aren't delayed by batching.
-        (sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY, true) ?: sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY))
-            ?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 0, handler) }
-            ?: Log.w(TAG, "no proximity sensor; assuming always in pocket")
+        val prox = sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY, true)
+            ?: sensors.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        hasProximity = prox != null
+        if (prox != null) sensors.registerListener(this, prox, SensorManager.SENSOR_DELAY_NORMAL, 0, handler)
+        else Feedback.show(this, "No proximity sensor; assuming always in pocket", error = true)
         UploadWorker.schedule(this)
         _status.value = _status.value.copy(running = true)
+        Feedback.show(this, "Tracking started")
     }
 
     private fun reloadConfig() {
         handler.post {
-            val wasInPocket = detector.inPocket
-            detector = PostureDetector(settings.detectorConfig())
-            detector.onPocket(System.currentTimeMillis(), wasInPocket)
+            val old = detector
+            detector = PostureDetector(settings.detectorConfig()).apply {
+                stateMachine.restore(old.state, old.stateMachine.stateSince)
+                onPocket(System.currentTimeMillis(), proximityNear)
+            }
             Log.i(TAG, "config ${detector.config}")
         }
     }
@@ -154,6 +177,7 @@ class PostureService : Service(), SensorEventListener {
         when (e.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
                 recorder?.write(TraceEvent.Accel(t, v))
+                calibSamples?.add(v)
                 val d = detector
                 d.onAccel(t, v).forEach(::handle)
                 if (t - lastStatusAt > 500) {
@@ -164,20 +188,107 @@ class PostureService : Service(), SensorEventListener {
                         raw = d.lastRaw,
                         tiltDeg = d.classifier.tiltDeg,
                         motionStd = d.classifier.magnitudeStd,
+                        inPocket = d.inPocket,
                     )
                 }
             }
             Sensor.TYPE_GYROSCOPE -> recorder?.write(TraceEvent.Gyro(t, v))
             Sensor.TYPE_PROXIMITY -> {
                 val near = e.values[0] < e.sensor.maximumRange
-                if (near != detector.inPocket) {
-                    Log.i(TAG, "pocket ${if (near) "in" else "out"}")
+                if (near != proximityNear) {
+                    proximityNear = near
+                    Log.i(TAG, "proximity ${if (near) "near" else "far"}")
                     recorder?.write(TraceEvent.Pocket(t, near))
                     detector.onPocket(t, near).forEach(::handle)
-                    _status.value = _status.value.copy(inPocket = near)
+                    onCalibrationProximity(near)
                 }
             }
         }
+    }
+
+    // --- calibration ---
+
+    private fun armCalibration(target: Posture) {
+        cancelCalibration(null)
+        calibTarget = target
+        val what = target.name.lowercase()
+        if (hasProximity && !proximityNear) {
+            setCalibStatus("Armed ($what): put the phone in your pocket")
+            Feedback.show(this, "Calibration armed: pocket the phone and $what still")
+        } else {
+            // Already covered (or no sensor): give a few seconds to get into position.
+            setCalibStatus("Armed ($what): starting in 8s")
+            Feedback.show(this, "Calibration starts in 8s — $what still")
+            handler.postDelayed(calibStart, 8000)
+        }
+    }
+
+    private fun onCalibrationProximity(near: Boolean) {
+        val target = calibTarget ?: return
+        val what = target.name.lowercase()
+        if (near) {
+            if (calibSamples == null) {
+                handler.removeCallbacks(calibStart)
+                handler.postDelayed(calibStart, 3000)
+                setCalibStatus("In pocket: recording in 3s ($what still)")
+            }
+        } else {
+            handler.removeCallbacks(calibStart)
+            if (calibSamples != null) {
+                handler.removeCallbacks(calibFinish)
+                calibSamples = null
+                Haptics.failure(this)
+            }
+            setCalibStatus("Armed ($what): put the phone in your pocket")
+        }
+    }
+
+    private fun beginCalibrationRecording() {
+        calibTarget ?: return
+        calibSamples = ArrayList()
+        Haptics.start(this)
+        setCalibStatus("Recording ${calibTarget!!.name.lowercase()}… hold still")
+        handler.postDelayed(calibFinish, 5000)
+    }
+
+    private fun finishCalibration() {
+        val target = calibTarget ?: return
+        val sample = CalibrationSample.of(calibSamples ?: emptyList())
+        calibSamples = null
+        calibTarget = null
+        val g = sample.gravity
+        val now = System.currentTimeMillis()
+        if (!sample.ok) {
+            Haptics.failure(this)
+            recorder?.write(TraceEvent.Note(now, "calibration $target failed std=${sample.magnitudeStd} n=${sample.count}"))
+            setCalibStatus(null)
+            Feedback.show(this, "Calibration failed: moved too much (motion %.2f), try again".format(sample.magnitudeStd), error = true)
+            return
+        }
+        when (target) {
+            Posture.SITTING -> settings.sittingAxis = g
+            else -> settings.referenceAxis = g
+        }
+        recorder?.write(TraceEvent.Note(now, "calibrated $target ${g.x} ${g.y} ${g.z}"))
+        recorder?.write(TraceEvent.Label(now, target))
+        Haptics.success(this)
+        setCalibStatus(null)
+        Feedback.show(this, "Calibrated ${target.name.lowercase()}: (%.1f, %.1f, %.1f)".format(g.x, g.y, g.z))
+        reloadConfig()
+    }
+
+    private fun cancelCalibration(msg: String?) {
+        handler.removeCallbacks(calibStart)
+        handler.removeCallbacks(calibFinish)
+        val wasActive = calibTarget != null
+        calibTarget = null
+        calibSamples = null
+        setCalibStatus(null)
+        if (msg != null && wasActive) Feedback.show(this, msg)
+    }
+
+    private fun setCalibStatus(s: String?) {
+        _status.value = _status.value.copy(calibration = s)
     }
 
     private fun handle(ev: DetectorEvent) {
@@ -197,7 +308,7 @@ class PostureService : Service(), SensorEventListener {
                 alert("${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} for ${ev.durationMs / 60_000} min", "Time to change it up")
             }
         }
-        if (settings.lanUrl.isNotBlank()) Net.postAsync("${settings.lanUrl}/event", json.toString())
+        if (settings.lanUrl.isNotBlank()) Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
     }
 
     private fun alert(title: String, text: String) {
@@ -246,6 +357,7 @@ class PostureService : Service(), SensorEventListener {
         const val ACTION_LABEL = "com.zacaj.posture.LABEL"
         const val ACTION_CALIBRATE = "com.zacaj.posture.CALIBRATE"
         const val ACTION_FLUSH = "com.zacaj.posture.FLUSH"
+        const val ACTION_CALIBRATE_CANCEL = "com.zacaj.posture.CALIBRATE_CANCEL"
         const val EXTRA_LABEL = "label"
         private const val CHANNEL_STATUS = "status"
         private const val CHANNEL_ALERTS = "alerts"
