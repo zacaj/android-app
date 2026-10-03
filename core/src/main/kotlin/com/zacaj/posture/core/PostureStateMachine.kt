@@ -88,13 +88,45 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         return setPocket(tMs, false)
     }
 
+    /** When the phone last (debounced) went into / came out of the pocket. */
+    var lastPocketInAt: Long? = null
+        private set
+    var lastPocketOutAt: Long? = null
+        private set
+
     private fun setPocket(tMs: Long, inPocket: Boolean): List<DetectorEvent> {
         if (inPocket == this.inPocket) return emptyList()
         this.inPocket = inPocket
+        if (inPocket) lastPocketInAt = tMs else lastPocketOutAt = tMs
         classifier.reset()
         stateMachine.clearCandidate()
         lastRaw = null
         return stateMachine.tick(tMs)
+    }
+
+    /**
+     * The latest stretch of in-pocket time the current state covers: from when the state began
+     * (or the phone last went into the pocket, if later) until it came out (or now).
+     */
+    fun lastSegment(now: Long): Pair<Long, Long> {
+        val end = if (!inPocket) lastPocketOutAt ?: now else now
+        val since = stateMachine.stateSince.takeIf { state != Posture.UNKNOWN }
+        val pocketIn = lastPocketInAt?.takeIf { it < end }
+        val start = listOfNotNull(since, pocketIn).maxOrNull()?.takeIf { it < end }
+            ?: since?.takeIf { it < end }
+            ?: (end - 60_000)
+        return start to end
+    }
+
+    /**
+     * User says the last segment was actually [posture]. Adopts it as the current state (backdated
+     * to the segment start, so too-long timers count correctly) and returns the segment.
+     */
+    fun correct(now: Long, posture: Posture): Pair<Long, Long> {
+        val seg = lastSegment(now)
+        if (posture != state) stateMachine.restore(posture, seg.first)
+        stateMachine.clearCandidate()
+        return seg
     }
 
     fun onAccel(tMs: Long, accel: Vec3): List<DetectorEvent> {

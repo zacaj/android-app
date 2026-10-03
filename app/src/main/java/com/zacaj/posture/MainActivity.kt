@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Text("Label what you're doing now:")
+            Text("Wrong? Mark the latest stretch as:")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(Posture.SITTING, Posture.STANDING, Posture.WALKING).forEach { p ->
                     OutlinedButton({

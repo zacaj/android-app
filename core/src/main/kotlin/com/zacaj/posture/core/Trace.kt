@@ -10,7 +10,7 @@ import java.util.zip.GZIPInputStream
  * Trace format: CSV, one event per line, `t_ms,kind,x,y,z`.
  *  - `a` accelerometer (m/s^2), `g` gyroscope (rad/s)
  *  - `pocket` 1 = in pocket (proximity covered), 0 = out, in x
- *  - `label` ground truth posture in x (user-entered), `state` detector state in x, `note` free text in x
+ *  - `label` ground truth posture in x (user-entered); UNKNOWN ends a labeled range, `state` detector state in x, `note` free text in x
  * Lines starting with `#` are comments.
  */
 sealed interface TraceEvent {

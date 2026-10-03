@@ -19,11 +19,13 @@ data class ReplayResult(
         var li = -1
         for ((t, s) in timeline) {
             while (li + 1 < labels.size && labels[li + 1].tMs <= t) li++
-            if (li < 0 || t - labels[li].tMs < graceMs || t in outOfPocket) continue
+            // UNKNOWN labels mark the end of a labeled range
+            if (li < 0 || labels[li].posture == Posture.UNKNOWN || t - labels[li].tMs < graceMs || t in outOfPocket) continue
             val key = labels[li].posture to s
             confusion[key] = (confusion[key] ?: 0) + 1
         }
-        val latencies = labels.mapIndexed { i, l ->
+        val latencies = labels.mapIndexedNotNull { i, l ->
+            if (l.posture == Posture.UNKNOWN) return@mapIndexedNotNull null
             val end = labels.getOrNull(i + 1)?.tMs ?: Long.MAX_VALUE
             val hit = timeline.firstOrNull { (t, s) -> t >= l.tMs && t < end && s == l.posture }
             Latency(l, hit?.let { it.first - l.tMs })

@@ -29,6 +29,9 @@ import com.zacaj.posture.core.Vec3
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class Status(
     val running: Boolean = false,
@@ -97,11 +100,7 @@ class PostureService : Service(), SensorEventListener {
                 if (started) Feedback.show(this, "Settings applied to running tracker")
             }
             ACTION_LABEL -> intent.getStringExtra(EXTRA_LABEL)?.let { l ->
-                runCatching { Posture.valueOf(l) }.getOrNull()?.let { p ->
-                    handler.post { recorder?.write(TraceEvent.Label(System.currentTimeMillis(), p)) }
-                    Feedback.show(this, if (recorder != null || !started) "Labeled ${p.name.lowercase()}"
-                        else "Labeled ${p.name.lowercase()} (recording is off, label not saved)")
-                }
+                runCatching { Posture.valueOf(l) }.getOrNull()?.let { p -> handler.post { applyCorrection(p) } }
             }
             ACTION_CALIBRATE -> {
                 val target = intent.getStringExtra(EXTRA_LABEL)
@@ -190,6 +189,7 @@ class PostureService : Service(), SensorEventListener {
                         motionStd = d.classifier.magnitudeStd,
                         inPocket = d.inPocket,
                     )
+                    refreshNotification()
                 }
             }
             Sensor.TYPE_GYROSCOPE -> recorder?.write(TraceEvent.Gyro(t, v))
@@ -204,6 +204,43 @@ class PostureService : Service(), SensorEventListener {
                 }
             }
         }
+    }
+
+    /** User says the latest stretch was actually [p]: label it in the trace and adopt it. */
+    private fun applyCorrection(p: Posture) {
+        val now = System.currentTimeMillis()
+        val was = detector.state
+        val (start, end) = detector.correct(now, p)
+        recorder?.apply {
+            write(TraceEvent.Note(now, "correction $was -> $p for $start..$end"))
+            write(TraceEvent.Label(start, p))
+            write(TraceEvent.Label(end, Posture.UNKNOWN))
+        }
+        if (settings.lanUrl.isNotBlank()) {
+            val json = JSONObject().put("t", now).put("device", settings.deviceName).put("type", "correction")
+                .put("from", was.name).put("to", p.name).put("start", start).put("end", end)
+            Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
+        }
+        refreshNotification()
+        val fmt = SimpleDateFormat("HH:mm", Locale.US)
+        val range = "${fmt.format(Date(start))}–${fmt.format(Date(end))}"
+        Feedback.show(
+            this,
+            if (recorder == null) "Now ${p.name.lowercase()} (recording off, $range not saved)"
+            else if (was == p) "Confirmed ${p.name.lowercase()} for $range"
+            else "Corrected $range: ${was.name.lowercase()} → ${p.name.lowercase()}",
+        )
+    }
+
+    private var notifiedKey: Triple<Posture, Long, Boolean>? = null
+
+    /** Re-post the ongoing notification if state, start time or pocket status changed. */
+    private fun refreshNotification() {
+        val d = detector
+        val key = Triple(d.state, d.stateMachine.stateSince, d.inPocket)
+        if (key == notifiedKey) return
+        notifiedKey = key
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ONGOING, ongoingNotification())
     }
 
     // --- calibration ---
@@ -298,7 +335,7 @@ class PostureService : Service(), SensorEventListener {
             is DetectorEvent.StateChanged -> {
                 recorder?.write(TraceEvent.State(ev.tMs, ev.to))
                 json.put("type", "state").put("from", ev.from.name).put("to", ev.to.name).put("since", ev.since)
-                getSystemService(NotificationManager::class.java).notify(NOTIF_ONGOING, ongoingNotification(ev.to))
+                refreshNotification()
                 if (settings.notifyOnChange && ev.from != Posture.UNKNOWN) {
                     alert("Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
                 }
@@ -335,11 +372,24 @@ class PostureService : Service(), SensorEventListener {
         ),
     )
 
-    private fun ongoingNotification(p: Posture = detector.state): Notification =
-        NotificationCompat.Builder(this, CHANNEL_STATUS)
+    private fun ongoingNotification(): Notification {
+        val d = detector
+        val p = d.state
+        val since = d.stateMachine.stateSince
+        val known = p != Posture.UNKNOWN && since > 0
+        val title = if (known) {
+            "${p.name.lowercase().replaceFirstChar { it.uppercase() }} · since " +
+                SimpleDateFormat("HH:mm", Locale.US).format(Date(since))
+        } else "Detecting…"
+        val text = (if (d.inPocket) "" else "Paused (out of pocket) · ") + "Wrong? Tap what you were doing"
+        return NotificationCompat.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_posture)
-            .setContentTitle("Posture: ${p.name.lowercase()}")
-            .setContentText("Tap a button to label what you're actually doing")
+            .setContentTitle(title)
+            .setContentText(text)
+            // Live elapsed timer since the state began, without re-posting.
+            .setShowWhen(known)
+            .setWhen(if (known) since else System.currentTimeMillis())
+            .setUsesChronometer(known)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(openApp())
@@ -347,6 +397,7 @@ class PostureService : Service(), SensorEventListener {
             .addAction(labelAction(Posture.STANDING))
             .addAction(labelAction(Posture.WALKING))
             .build()
+    }
 
     companion object {
         const val TAG = "Posture"

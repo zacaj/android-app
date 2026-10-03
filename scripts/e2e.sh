@@ -79,6 +79,12 @@ grep -q "Calibrated sitting" "$OUT/logcat.txt" || { echo "FAIL: calibration did 
 echo "calibration OK"
 wait_for SITTING 20
 
+# Correction from the notification: relabel the latest stretch.
+adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.LABEL --es label WALKING
+for _ in $(seq 10); do grep -q '"type": "correction"' "$OUT/events.jsonl" && break; sleep 1; done
+grep -q '"type": "correction".*"to": "WALKING"' "$OUT/events.jsonl" || { echo "FAIL: no correction event"; exit 1; }
+echo "correction OK"
+
 # Recorder: flush and confirm a trace file was written with accel rows.
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.FLUSH
 sleep 3

@@ -156,3 +156,52 @@ class RestoreTest {
         assertTrue(ev.none { it is DetectorEvent.StateChanged })
     }
 }
+
+class CorrectionTest {
+    private fun feed(d: PostureDetector, events: List<TraceEvent>) = events.sortedBy { it.tMs }.forEach {
+        when (it) {
+            is TraceEvent.Accel -> d.onAccel(it.tMs, it.v)
+            is TraceEvent.Pocket -> d.onPocket(it.tMs, it.inPocket)
+            else -> {}
+        }
+    }
+
+    @Test
+    fun `correction covers in-pocket stretch and backdates state`() {
+        val gen = SyntheticTrace(seed = 11).segment(Posture.STANDING, 30_000)
+        val pocketOutAt = gen.events.last().tMs
+        gen.inHand(20_000)
+        val d = PostureDetector()
+        // drop the trailing pocket-in so we're still holding the phone when correcting
+        feed(d, gen.events.dropLast(1))
+        assertEquals(Posture.STANDING, d.state)
+        val now = gen.events.last().tMs
+        val (start, end) = d.correct(now, Posture.SITTING)
+        assertEquals(d.stateMachine.stateSince, start)
+        assertTrue(end in pocketOutAt..pocketOutAt + 2000, "segment should end at debounced pocket-out")
+        assertEquals(Posture.SITTING, d.state)
+    }
+
+    @Test
+    fun `segment starts at pocket-in when state began earlier`() {
+        val gen = SyntheticTrace(seed = 12).segment(Posture.SITTING, 20_000).inHand(10_000)
+        val pocketInAt = gen.events.last().tMs
+        gen.segment(Posture.SITTING, 20_000, label = false)
+        val d = PostureDetector()
+        feed(d, gen.events)
+        val (start, _) = d.lastSegment(gen.events.last().tMs)
+        assertEquals(pocketInAt, start)
+    }
+
+    @Test
+    fun `range labels end at UNKNOWN`() {
+        val trace = SyntheticTrace(seed = 13).segment(Posture.STANDING, 20_000, label = false)
+            .segment(Posture.SITTING, 20_000, label = false).events.toMutableList()
+        val t0 = trace.first().tMs
+        trace += TraceEvent.Label(t0, Posture.STANDING)
+        trace += TraceEvent.Label(t0 + 20_000, Posture.UNKNOWN)
+        val score = Replay.run(trace).score()
+        assertTrue(score.confusion.keys.all { it.first == Posture.STANDING }, score.report())
+        assertEquals(1, score.latencies.size)
+    }
+}
