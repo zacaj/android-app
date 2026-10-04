@@ -48,14 +48,17 @@ wait_for SITTING 20
 # walking: oscillate the acceleration for a while
 end=$((SECONDS + 15))
 i=0
+# ~2 Hz gait with thigh rotation (walking needs gait-rate rhythm + gyro, not just shaking)
+gyro() { adb emu sensor set gyroscope "$1" > /dev/null; }
 while (( SECONDS < end )); do
-    if (( i++ % 2 )); then accel 1.5:13.5:2.5; else accel -1.5:6.0:-2.5; fi
+    if (( i++ % 2 )); then accel 1.5:13.5:2.5; gyro 1.5:0.5:1.2; else accel -1.5:6.0:-2.5; gyro -1.5:-0.5:-1.2; fi
+    sleep 0.2
 done &
 WALK=$!
 wait_for WALKING 20
 wait $WALK || true
 
-accel 0:9.81:0
+accel 0:9.81:0; adb emu sensor set gyroscope 0:0:0 > /dev/null
 wait_for STANDING 20
 
 # Out of pocket: holding the phone at a "sitting" angle must not change state.
