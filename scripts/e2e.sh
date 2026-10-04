@@ -70,6 +70,8 @@ if grep -q '"to": "SITTING"' <(tail -n 1 "$OUT/events.jsonl"); then
     echo "FAIL: state changed while out of pocket"; exit 1
 fi
 echo "held STANDING while out of pocket"
+grep -q '"type": "pocket", "in": false' "$OUT/events.jsonl" || { echo "FAIL: no pocket-out event"; exit 1; }
+grep -q '"type": "heartbeat"' "$OUT/events.jsonl" || { echo "FAIL: no heartbeat"; exit 1; }
 accel 0:9.81:0
 prox 0
 sleep 2

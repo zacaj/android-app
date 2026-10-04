@@ -111,7 +111,7 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         classifier.reset()
         stateMachine.clearCandidate()
         lastRaw = null
-        return stateMachine.tick(tMs)
+        return listOf(DetectorEvent.PocketChanged(tMs, inPocket)) + stateMachine.tick(tMs)
     }
 
     /**

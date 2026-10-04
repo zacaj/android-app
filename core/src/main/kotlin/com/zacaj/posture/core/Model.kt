@@ -24,6 +24,9 @@ sealed interface DetectorEvent {
     data class StateChanged(override val tMs: Long, val from: Posture, val to: Posture, val since: Long) : DetectorEvent
 
     data class TooLong(override val tMs: Long, val state: Posture, val durationMs: Long) : DetectorEvent
+
+    /** Debounced pocket change; detection is paused while [inPocket] is false. */
+    data class PocketChanged(override val tMs: Long, val inPocket: Boolean) : DetectorEvent
 }
 
 /** Sign-agnostic angle in degrees between two vectors; NaN if either is zero. */

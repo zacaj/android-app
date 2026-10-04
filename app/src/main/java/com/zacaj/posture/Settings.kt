@@ -24,6 +24,11 @@ class Settings(context: Context) {
         p.getInt("limit_$posture", if (posture == Posture.SITTING) 45 else 0)
     fun setLimitMin(posture: Posture, v: Int) = p.edit { putInt("limit_$posture", v) }
 
+    /** Minutes between heartbeat POSTs to the LAN listener; 0 disables. */
+    var heartbeatMin: Int
+        get() = p.getInt("heartbeatMin", 5)
+        set(v) = p.edit { putInt("heartbeatMin", v) }
+
     var repeatMin: Int
         get() = p.getInt("repeatMin", 15)
         set(v) = p.edit { putInt("repeatMin", v) }

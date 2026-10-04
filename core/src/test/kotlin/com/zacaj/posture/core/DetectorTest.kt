@@ -82,6 +82,19 @@ class PocketTest {
     }
 
     @Test
+    fun `reports pocket out and back in`() {
+        val gen = SyntheticTrace(seed = 6)
+            .segment(Posture.SITTING, 20_000)
+            .inHand(60_000)
+            .segment(Posture.SITTING, 20_000, label = false)
+        val r = Replay.run(gen.events)
+        assertEquals(
+            listOf(false, true),
+            r.events.filterIsInstance<DetectorEvent.PocketChanged>().map { it.inPocket },
+        )
+    }
+
+    @Test
     fun `without pocket events the same data would flip state`() {
         val gen = SyntheticTrace(seed = 6)
             .segment(Posture.SITTING, 20_000)

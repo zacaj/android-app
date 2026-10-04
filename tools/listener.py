@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal LAN listener for the Posture app.
 
-POST /event          JSON state/too_long events -> printed + appended to <out>/events.jsonl
+POST /event          JSON state/too_long/pocket/heartbeat/correction events -> printed + appended to <out>/events.jsonl
 POST /trace/<name>   gzipped trace upload        -> saved to <out>/traces/<name>
 """
 import argparse, json, os, re, sys, time

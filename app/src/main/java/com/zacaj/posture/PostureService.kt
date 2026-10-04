@@ -145,7 +145,24 @@ class PostureService : Service(), SensorEventListener {
         Feedback.show(this, "Tracking started")
     }
 
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            val min = settings.heartbeatMin
+            if (!started || min <= 0) return
+            val d = detector
+            if (settings.lanUrl.isNotBlank()) {
+                val json = JSONObject().put("t", System.currentTimeMillis()).put("device", settings.deviceName)
+                    .put("type", "heartbeat").put("state", d.state.name).put("since", d.stateMachine.stateSince)
+                    .put("inPocket", d.inPocket).put("version", BuildConfig.VERSION_NAME)
+                Net.postAsync(this@PostureService, "${settings.lanUrl}/event", json.toString())
+            }
+            handler.postDelayed(this, min * 60_000L)
+        }
+    }
+
     private fun reloadConfig() {
+        handler.removeCallbacks(heartbeat)
+        handler.post(heartbeat)
         handler.post {
             val old = detector
             detector = PostureDetector(settings.detectorConfig()).apply {
@@ -159,6 +176,7 @@ class PostureService : Service(), SensorEventListener {
     override fun onDestroy() {
         Log.i(TAG, "stopping")
         sensors.unregisterListener(this)
+        handler.removeCallbacks(heartbeat)
         handler.post {
             recorder?.close()
             thread.quitSafely()
@@ -342,6 +360,10 @@ class PostureService : Service(), SensorEventListener {
                 if (settings.notifyOnChange && ev.from != Posture.UNKNOWN) {
                     alert("Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
                 }
+            }
+            is DetectorEvent.PocketChanged -> {
+                json.put("type", "pocket").put("in", ev.inPocket).put("state", detector.state.name)
+                refreshNotification()
             }
             is DetectorEvent.TooLong -> {
                 json.put("type", "too_long").put("state", ev.state.name).put("durationMs", ev.durationMs)
