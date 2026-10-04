@@ -11,7 +11,17 @@ class PostureStateMachine(private val config: DetectorConfig) {
     private var candidateSince = 0L
     private var lastTooLongAt: Long? = null
 
-    fun onRaw(tMs: Long, raw: Posture?): List<DetectorEvent> {
+    private var suppressed: Posture? = null
+    private var suppressedUntil = 0L
+
+    /** Treat raw readings of [p] as ambiguous until [untilMs] (after a user correction). */
+    fun suppress(p: Posture, untilMs: Long) {
+        suppressed = p
+        suppressedUntil = untilMs
+    }
+
+    fun onRaw(tMs: Long, rawIn: Posture?): List<DetectorEvent> {
+        val raw = if (rawIn != null && rawIn == suppressed && tMs < suppressedUntil) null else rawIn
         val out = mutableListOf<DetectorEvent>()
         if (raw == null || raw == state) {
             // Dead band / ambiguous keeps the pending candidate; agreeing with state cancels it.
@@ -124,7 +134,11 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
      */
     fun correct(now: Long, posture: Posture): Pair<Long, Long> {
         val seg = lastSegment(now)
-        if (posture != state) stateMachine.restore(posture, seg.first)
+        if (posture != state) {
+            // The detector was wrong about the old state; don't let it flip straight back.
+            stateMachine.suppress(state, now + config.correctionHoldMs)
+            stateMachine.restore(posture, seg.first)
+        }
         stateMachine.clearCandidate()
         return seg
     }
@@ -137,7 +151,9 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         return stateMachine.onRaw(tMs, lastRaw)
     }
 
-    /** Gyro isn't used for classification yet; it's recorded for offline tuning. */
-    @Suppress("UNUSED_PARAMETER")
-    fun onGyro(tMs: Long, gyro: Vec3): List<DetectorEvent> = emptyList()
+    /** Gyro feeds the walking check (thigh rotation). */
+    fun onGyro(tMs: Long, gyro: Vec3): List<DetectorEvent> {
+        if (inPocket) classifier.addGyro(tMs, gyro)
+        return emptyList()
+    }
 }

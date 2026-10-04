@@ -57,6 +57,12 @@ data class DetectorConfig(
     val windowMs: Long = 2000,
     /** Std-dev of accel magnitude (m/s^2) above which we call it walking. */
     val walkStdThreshold: Float = 1.0f,
+    /** Mean thigh rotation (rad/s) required for walking. Seated foot-bounce measured ~0.3, walking 1.4+. */
+    val walkGyroMin: Float = 0.8f,
+    /** Gait rhythm range. Seated foot-bounce measured ~4.7 Hz, walking 1.8–2.4 Hz. */
+    val walkCadenceHz: ClosedFloatingPointRange<Float> = 0.8f..3.5f,
+    /** After a user correction, ignore raw readings of the corrected-away state for this long. */
+    val correctionHoldMs: Long = 5 * 60_000L,
     /** Angle between gravity and [referenceAxis] (sign-agnostic) below which we're standing. */
     val standMaxDeg: Float = 35f,
     /** ...and above which we're sitting. Between the two is a dead band (no change). */

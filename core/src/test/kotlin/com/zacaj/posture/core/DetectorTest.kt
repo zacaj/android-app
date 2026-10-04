@@ -205,3 +205,20 @@ class CorrectionTest {
         assertEquals(1, score.latencies.size)
     }
 }
+
+class CorrectionHoldTest {
+    @Test
+    fun `correction is not immediately overridden by the same misreading`() {
+        val sm = PostureStateMachine(DetectorConfig())
+        var t = 0L
+        repeat(200) { sm.onRaw(t, Posture.WALKING); t += 40 }
+        assertEquals(Posture.WALKING, sm.state)
+        sm.suppress(Posture.WALKING, t + 60_000)
+        sm.restore(Posture.SITTING, t)
+        repeat(500) { sm.onRaw(t, Posture.WALKING); t += 40 } // 20s of the same misreading
+        assertEquals(Posture.SITTING, sm.state)
+        // a different state can still take over
+        repeat(200) { sm.onRaw(t, Posture.STANDING); t += 40 }
+        assertEquals(Posture.STANDING, sm.state)
+    }
+}

@@ -192,7 +192,10 @@ class PostureService : Service(), SensorEventListener {
                     refreshNotification()
                 }
             }
-            Sensor.TYPE_GYROSCOPE -> recorder?.write(TraceEvent.Gyro(t, v))
+            Sensor.TYPE_GYROSCOPE -> {
+                recorder?.write(TraceEvent.Gyro(t, v))
+                detector.onGyro(t, v)
+            }
             Sensor.TYPE_PROXIMITY -> {
                 val near = e.values[0] < e.sensor.maximumRange
                 if (near != proximityNear) {
