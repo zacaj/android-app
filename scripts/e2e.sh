@@ -46,7 +46,7 @@ accel 0:1.5:9.7  # sitting: thigh horizontal
 wait_for SITTING 20
 
 # walking: oscillate the acceleration for a while
-end=$((SECONDS + 15))
+end=$((SECONDS + 30))
 i=0
 # ~2 Hz gait with thigh rotation (walking needs gait-rate rhythm + gyro, not just shaking)
 gyro() { adb emu sensor set gyroscope "$1" > /dev/null; }
@@ -55,7 +55,7 @@ while (( SECONDS < end )); do
     sleep 0.2
 done &
 WALK=$!
-wait_for WALKING 20
+wait_for WALKING 35
 wait $WALK || true
 
 accel 0:9.81:0; adb emu sensor set gyroscope 0:0:0 > /dev/null

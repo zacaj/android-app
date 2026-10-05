@@ -64,6 +64,8 @@ data class DetectorConfig(
     val walkGyroMin: Float = 0.8f,
     /** Gait rhythm range. Seated foot-bounce measured ~4.7 Hz, walking 1.8–2.4 Hz. */
     val walkCadenceHz: ClosedFloatingPointRange<Float> = 0.8f..3.5f,
+    /** Motion that passes everything but cadence still counts as walking this soon after a gait reading. */
+    val walkCadenceHoldMs: Long = 5000,
     /** After a user correction, ignore raw readings of the corrected-away state for this long. */
     val correctionHoldMs: Long = 5 * 60_000L,
     /** Angle between gravity and [referenceAxis] (sign-agnostic) below which we're standing. */
@@ -87,8 +89,14 @@ data class DetectorConfig(
     val minDwellMs: Map<Posture, Long> = mapOf(
         Posture.SITTING to 4000,
         Posture.STANDING to 4000,
-        Posture.WALKING to 3000,
+        // Long enough that a few steps or shuffling in place don't count as a walk.
+        Posture.WALKING to 15_000,
     ),
+    /**
+     * Gait readings dip between windows (turns, pauses at a door); a pending WALKING candidate
+     * survives non-walking readings for this long instead of restarting its dwell.
+     */
+    val walkGapToleranceMs: Long = 3000,
     /** Alert once a state has lasted this long (absent = never). */
     val tooLongMs: Map<Posture, Long> = mapOf(Posture.SITTING to 45 * 60_000L),
     /** Re-alert interval while still in a too-long state. */

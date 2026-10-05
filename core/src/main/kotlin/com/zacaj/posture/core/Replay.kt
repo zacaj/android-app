@@ -1,7 +1,10 @@
 package com.zacaj.posture.core
 
 data class ReplayResult(
-    /** Detector state after each accel sample. */
+    /**
+     * Detector state at each accel sample, with each change backdated to its `since` (as the app's
+     * history and LAN events report it), so dwell time isn't counted as error.
+     */
     val timeline: List<Pair<Long, Posture>>,
     /** Accel sample times taken while the phone was out of the pocket (excluded from scoring). */
     val outOfPocket: Set<Long> = emptySet(),
@@ -64,7 +67,15 @@ object Replay {
         for (e in trace.sortedBy { it.tMs }) {
             when (e) {
                 is TraceEvent.Accel -> {
-                    events += detector.onAccel(e.tMs, e.v)
+                    val evs = detector.onAccel(e.tMs, e.v)
+                    events += evs
+                    for (ev in evs) if (ev is DetectorEvent.StateChanged) {
+                        var i = timeline.size - 1
+                        while (i >= 0 && timeline[i].first >= ev.since) {
+                            timeline[i] = timeline[i].first to ev.to
+                            i--
+                        }
+                    }
                     timeline += e.tMs to detector.state
                     if (!detector.inPocket) outOfPocket += e.tMs
                 }

@@ -9,6 +9,7 @@ class PostureStateMachine(private val config: DetectorConfig) {
 
     private var candidate: Posture? = null
     private var candidateSince = 0L
+    private var candidateLastSeen = 0L
     private var lastTooLongAt: Long? = null
 
     private var suppressed: Posture? = null
@@ -23,18 +24,24 @@ class PostureStateMachine(private val config: DetectorConfig) {
     fun onRaw(tMs: Long, rawIn: Posture?): List<DetectorEvent> {
         val raw = if (rawIn != null && rawIn == suppressed && tMs < suppressedUntil) null else rawIn
         val out = mutableListOf<DetectorEvent>()
+        val gapOk = candidate == Posture.WALKING && tMs - candidateLastSeen <= config.walkGapToleranceMs
         if (raw == null || raw == state) {
-            // Dead band / ambiguous keeps the pending candidate; agreeing with state cancels it.
-            if (raw == state) candidate = null
+            // Dead band / ambiguous keeps the pending candidate; agreeing with state cancels it
+            // (after a short grace for walking, whose readings dip mid-stride).
+            if (raw == state && !gapOk) candidate = null
         } else if (raw != candidate) {
             candidate = raw
             candidateSince = tMs
-        } else if (tMs - candidateSince >= (config.minDwellMs[raw] ?: 0L)) {
-            out += DetectorEvent.StateChanged(tMs, state, raw, candidateSince)
-            state = raw
-            stateSince = candidateSince
-            candidate = null
-            lastTooLongAt = null
+            candidateLastSeen = tMs
+        } else {
+            candidateLastSeen = tMs
+            if (tMs - candidateSince >= (config.minDwellMs[raw] ?: 0L)) {
+                out += DetectorEvent.StateChanged(tMs, state, raw, candidateSince)
+                state = raw
+                stateSince = candidateSince
+                candidate = null
+                lastTooLongAt = null
+            }
         }
         out += tick(tMs)
         return out

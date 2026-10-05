@@ -224,7 +224,7 @@ class CorrectionHoldTest {
     fun `correction is not immediately overridden by the same misreading`() {
         val sm = PostureStateMachine(DetectorConfig())
         var t = 0L
-        repeat(200) { sm.onRaw(t, Posture.WALKING); t += 40 }
+        repeat(500) { sm.onRaw(t, Posture.WALKING); t += 40 }
         assertEquals(Posture.WALKING, sm.state)
         sm.suppress(Posture.WALKING, t + 60_000)
         sm.restore(Posture.SITTING, t)
@@ -233,5 +233,28 @@ class CorrectionHoldTest {
         // a different state can still take over
         repeat(200) { sm.onRaw(t, Posture.STANDING); t += 40 }
         assertEquals(Posture.STANDING, sm.state)
+    }
+}
+
+class SegmentLogTest {
+    @Test
+    fun `splits on state and pocket changes and relabels`() {
+        val log = SegmentLog()
+        log.onEvent(DetectorEvent.StateChanged(5_000, Posture.UNKNOWN, Posture.STANDING, 1_000))
+        log.onEvent(DetectorEvent.StateChanged(20_000, Posture.STANDING, Posture.WALKING, 10_000))
+        log.onEvent(DetectorEvent.PocketChanged(30_000, false))
+        log.onEvent(DetectorEvent.PocketChanged(40_000, true))
+        assertEquals(
+            listOf(
+                Segment(1_000, 10_000, Posture.STANDING),
+                Segment(10_000, 30_000, Posture.WALKING),
+                Segment(40_000, null, Posture.WALKING),
+            ),
+            log.segments,
+        )
+        assertEquals(Posture.STANDING, log.relabel(10_000, Posture.STANDING)?.shown)
+        log.correctCurrent(40_000, Posture.SITTING)
+        assertEquals(Segment(40_000, null, Posture.SITTING, Posture.SITTING), log.segments.last())
+        assertEquals(3, log.segments.size)
     }
 }

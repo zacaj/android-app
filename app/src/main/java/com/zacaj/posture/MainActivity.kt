@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +40,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.zacaj.posture.core.Posture
+import com.zacaj.posture.core.Segment
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,6 +130,11 @@ class MainActivity : ComponentActivity() {
                     }) { Text(p.name.lowercase()) }
                 }
             }
+            if (status.segments.isNotEmpty()) {
+                HorizontalDivider()
+                Text("Recent (tap a letter to relabel):", style = MaterialTheme.typography.titleSmall)
+                status.segments.asReversed().forEach { seg -> SegmentRow(seg) }
+            }
             OutlinedButton({ PostureService.send(this@MainActivity, PostureService.ACTION_FLUSH) }) {
                 Text("Close trace & upload now")
             }
@@ -190,6 +200,33 @@ class MainActivity : ComponentActivity() {
             Feedback.show(this, "Calibration reset to defaults")
         }) {
             Text("Reset calibration")
+        }
+    }
+
+    @Composable
+    private fun SegmentRow(seg: Segment) {
+        val fmt = remember { SimpleDateFormat("HH:mm", Locale.US) }
+        val end = seg.end ?: System.currentTimeMillis()
+        val mins = (end - seg.start) / 60_000
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "${fmt.format(Date(seg.start))}–${seg.end?.let { fmt.format(Date(it)) } ?: "now"} " +
+                    "(${mins}m) ${seg.shown.name.lowercase()}" + if (seg.label != null) " ✓" else "",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            listOf(Posture.SITTING, Posture.STANDING, Posture.WALKING).forEach { p ->
+                OutlinedButton(
+                    {
+                        PostureService.send(this@MainActivity, PostureService.ACTION_RELABEL) {
+                            putExtra(PostureService.EXTRA_START, seg.start)
+                            putExtra(PostureService.EXTRA_LABEL, p.name)
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    enabled = p != seg.shown,
+                ) { Text(p.name.take(2).lowercase().replaceFirstChar { it.uppercase() }) }
+            }
         }
     }
 

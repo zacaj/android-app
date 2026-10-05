@@ -23,6 +23,8 @@ import androidx.core.app.ServiceCompat
 import com.zacaj.posture.core.CalibrationSample
 import com.zacaj.posture.core.DetectorEvent
 import com.zacaj.posture.core.Posture
+import com.zacaj.posture.core.Segment
+import com.zacaj.posture.core.SegmentLog
 import com.zacaj.posture.core.PostureDetector
 import com.zacaj.posture.core.TraceEvent
 import com.zacaj.posture.core.Vec3
@@ -43,6 +45,8 @@ data class Status(
     val inPocket: Boolean = true,
     /** Calibration progress text, null when idle. */
     val calibration: String? = null,
+    /** Recent detected stretches, newest last. */
+    val segments: List<Segment> = emptyList(),
 )
 
 class PostureService : Service(), SensorEventListener {
@@ -98,6 +102,10 @@ class PostureService : Service(), SensorEventListener {
             ACTION_RELOAD -> {
                 reloadConfig()
                 if (started) Feedback.show(this, "Settings applied to running tracker")
+            }
+            ACTION_RELABEL -> intent.getStringExtra(EXTRA_LABEL)?.let { l ->
+                val start = intent.getLongExtra(EXTRA_START, -1)
+                runCatching { Posture.valueOf(l) }.getOrNull()?.let { p -> handler.post { relabel(start, p) } }
             }
             ACTION_LABEL -> intent.getStringExtra(EXTRA_LABEL)?.let { l ->
                 runCatching { Posture.valueOf(l) }.getOrNull()?.let { p -> handler.post { applyCorrection(p) } }
@@ -227,11 +235,45 @@ class PostureService : Service(), SensorEventListener {
         }
     }
 
+    private val segLog = SegmentLog()
+
+    private fun publishSegments() {
+        _status.value = _status.value.copy(segments = segLog.segments)
+    }
+
+    /** Relabel a logged stretch; the ongoing one goes through [applyCorrection] so the detector adopts it. */
+    private fun relabel(start: Long, p: Posture) {
+        val seg = segLog.segments.firstOrNull { it.start == start }
+            ?: return Feedback.show(this, "That stretch is no longer in the log", error = true)
+        val end = seg.end ?: return applyCorrection(p)
+        val now = System.currentTimeMillis()
+        segLog.relabel(start, p)
+        publishSegments()
+        recorder?.apply {
+            write(TraceEvent.Note(now, "relabel ${seg.detected} -> $p for ${seg.start}..${end}"))
+            write(TraceEvent.Label(seg.start, p))
+            write(TraceEvent.Label(end, Posture.UNKNOWN))
+        }
+        if (settings.lanUrl.isNotBlank()) {
+            val json = JSONObject().put("t", now).put("device", settings.deviceName).put("type", "correction")
+                .put("from", seg.detected.name).put("to", p.name).put("start", seg.start).put("end", end)
+            Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
+        }
+        val fmt = SimpleDateFormat("HH:mm", Locale.US)
+        Feedback.show(
+            this,
+            if (recorder == null) "Relabeled (recording off, not saved to trace)"
+            else "Relabeled ${fmt.format(Date(seg.start))}–${fmt.format(Date(end))}: ${seg.detected.name.lowercase()} → ${p.name.lowercase()}",
+        )
+    }
+
     /** User says the latest stretch was actually [p]: label it in the trace and adopt it. */
     private fun applyCorrection(p: Posture) {
         val now = System.currentTimeMillis()
         val was = detector.state
         val (start, end) = detector.correct(now, p)
+        segLog.correctCurrent(start, p)
+        publishSegments()
         recorder?.apply {
             write(TraceEvent.Note(now, "correction $was -> $p for $start..$end"))
             write(TraceEvent.Label(start, p))
@@ -351,6 +393,8 @@ class PostureService : Service(), SensorEventListener {
 
     private fun handle(ev: DetectorEvent) {
         Log.i(TAG, "event $ev")
+        segLog.onEvent(ev)
+        if (ev !is DetectorEvent.TooLong) publishSegments()
         val json = JSONObject().put("t", ev.tMs).put("device", settings.deviceName)
         when (ev) {
             is DetectorEvent.StateChanged -> {
@@ -431,6 +475,8 @@ class PostureService : Service(), SensorEventListener {
         const val ACTION_CONFIGURE = "com.zacaj.posture.CONFIGURE"
         const val ACTION_RELOAD = "com.zacaj.posture.RELOAD"
         const val ACTION_LABEL = "com.zacaj.posture.LABEL"
+        const val ACTION_RELABEL = "com.zacaj.posture.RELABEL"
+        const val EXTRA_START = "start"
         const val ACTION_CALIBRATE = "com.zacaj.posture.CALIBRATE"
         const val ACTION_FLUSH = "com.zacaj.posture.FLUSH"
         const val ACTION_CALIBRATE_CANCEL = "com.zacaj.posture.CALIBRATE_CANCEL"

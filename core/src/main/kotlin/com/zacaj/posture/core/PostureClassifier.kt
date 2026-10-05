@@ -32,6 +32,7 @@ class PostureClassifier(private val config: DetectorConfig) {
         samples.clear()
         gyroTimes.clear()
         gyroMags.clear()
+        lastGaitAt = null
     }
 
     fun addGyro(tMs: Long, gyro: Vec3) {
@@ -86,18 +87,26 @@ class PostureClassifier(private val config: DetectorConfig) {
             tiltDeg >= config.sitMinDeg -> Posture.SITTING
             else -> null
         }
-        return if (isWalking()) Posture.WALKING else orientation
+        return if (isWalking(tMs)) Posture.WALKING else orientation
     }
+
+    private var lastGaitAt: Long? = null
 
     /**
      * Walking needs: enough motion, a leg that isn't horizontal, real thigh rotation, and a gait-rate
      * rhythm. Foot-bouncing while seated fails the last three (thigh flat, ~0.3 rad/s, ~4-5 Hz).
      */
-    private fun isWalking(): Boolean {
+    private fun isWalking(tMs: Long): Boolean {
         if (magnitudeStd < config.walkStdThreshold) return false
         if (orientation == Posture.SITTING) return false
         if (!gyroMean.isNaN() && gyroMean < config.walkGyroMin) return false
-        return cadenceHz in config.walkCadenceHz
+        if (cadenceHz in config.walkCadenceHz) {
+            lastGaitAt = tMs
+            return true
+        }
+        // Cadence estimates wobble mid-walk (turns, uneven steps); keep moving windows shortly after a
+        // clear gait reading.
+        return lastGaitAt?.let { tMs - it <= config.walkCadenceHoldMs } == true
     }
 
     /** Mean-crossings of |accel| with hysteresis, as a frequency. */
