@@ -402,7 +402,7 @@ class PostureService : Service(), SensorEventListener {
                 json.put("type", "state").put("from", ev.from.name).put("to", ev.to.name).put("since", ev.since)
                 refreshNotification()
                 if (settings.notifyOnChange && ev.from != Posture.UNKNOWN) {
-                    alert("Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
+                    alert(CHANNEL_CHANGES, NOTIF_CHANGE, "Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
                 }
             }
             is DetectorEvent.PocketChanged -> {
@@ -411,14 +411,14 @@ class PostureService : Service(), SensorEventListener {
             }
             is DetectorEvent.TooLong -> {
                 json.put("type", "too_long").put("state", ev.state.name).put("durationMs", ev.durationMs)
-                alert("${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} for ${ev.durationMs / 60_000} min", "Time to change it up")
+                alert(CHANNEL_ALERTS, NOTIF_ALERT, "${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} for ${ev.durationMs / 60_000} min", "Time to change it up")
             }
         }
         if (settings.lanUrl.isNotBlank()) Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
     }
 
-    private fun alert(title: String, text: String) {
-        val n = NotificationCompat.Builder(this, CHANNEL_ALERTS)
+    private fun alert(channel: String, id: Int, title: String, text: String) {
+        val n = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_posture)
             .setContentTitle(title)
             .setContentText(text)
@@ -426,7 +426,7 @@ class PostureService : Service(), SensorEventListener {
             .setContentIntent(openApp())
             .setAutoCancel(true)
             .build()
-        getSystemService(NotificationManager::class.java).notify(NOTIF_ALERT, n)
+        getSystemService(NotificationManager::class.java).notify(id, n)
     }
 
     private fun openApp() = PendingIntent.getActivity(
@@ -482,9 +482,12 @@ class PostureService : Service(), SensorEventListener {
         const val ACTION_CALIBRATE_CANCEL = "com.zacaj.posture.CALIBRATE_CANCEL"
         const val EXTRA_LABEL = "label"
         private const val CHANNEL_STATUS = "status"
+        /** Too-long reminders (id kept from when it also carried state changes, so user settings survive). */
         private const val CHANNEL_ALERTS = "alerts"
+        private const val CHANNEL_CHANGES = "changes"
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_ALERT = 2
+        private const val NOTIF_CHANGE = 3
 
         private val _status = MutableStateFlow(Status())
         val status: StateFlow<Status> = _status
@@ -498,7 +501,8 @@ class PostureService : Service(), SensorEventListener {
         fun createChannels(ctx: Context) {
             val nm = ctx.getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel(CHANNEL_STATUS, "Status", NotificationManager.IMPORTANCE_LOW))
-            nm.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS, "Alerts", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS, "Too long reminders", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_CHANGES, "Posture changes", NotificationManager.IMPORTANCE_DEFAULT))
         }
     }
 }
