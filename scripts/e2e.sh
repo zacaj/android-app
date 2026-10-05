@@ -30,7 +30,7 @@ prox() { adb emu sensor set proximity "$1" > /dev/null; }
 prox 0           # covered = in pocket
 accel 0:9.81:0   # standing: gravity along the phone's long axis
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.CONFIGURE \
-    --es lanUrl "http://10.0.2.2:$PORT" --ez notifyOnChange true
+    --es lanUrl "http://10.0.2.2:$PORT" --ez notifyOnChange true --ez lanWifiOnly false
 
 wait_for() { # wait_for <to-state> <timeout-s>
     for _ in $(seq "$2"); do

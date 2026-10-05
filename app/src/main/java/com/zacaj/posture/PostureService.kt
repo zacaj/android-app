@@ -94,6 +94,9 @@ class PostureService : Service(), SensorEventListener {
             }
             ACTION_CONFIGURE -> {
                 intent.getStringExtra("lanUrl")?.let { settings.lanUrl = it }
+                if (intent.hasExtra("lanWifiOnly")) {
+                    settings.lanWifiOnly = intent.getBooleanExtra("lanWifiOnly", true)
+                }
                 if (intent.hasExtra("notifyOnChange")) {
                     settings.notifyOnChange = intent.getBooleanExtra("notifyOnChange", false)
                 }
@@ -129,6 +132,7 @@ class PostureService : Service(), SensorEventListener {
 
     private fun start() {
         started = true
+        Net.onLanErrorChanged = { handler.post { refreshNotification() } }
         Log.i(TAG, "starting")
         if (settings.recordTraces) recorder = TraceRecorder(UploadWorker.traceRoot(this))
         reloadConfig()
@@ -182,6 +186,7 @@ class PostureService : Service(), SensorEventListener {
     }
 
     override fun onDestroy() {
+        Net.onLanErrorChanged = null
         Log.i(TAG, "stopping")
         sensors.unregisterListener(this)
         handler.removeCallbacks(heartbeat)
@@ -295,12 +300,12 @@ class PostureService : Service(), SensorEventListener {
         )
     }
 
-    private var notifiedKey: Triple<Posture, Long, Boolean>? = null
+    private var notifiedKey: List<Any?>? = null
 
     /** Re-post the ongoing notification if state, start time or pocket status changed. */
     private fun refreshNotification() {
         val d = detector
-        val key = Triple(d.state, d.stateMachine.stateSince, d.inPocket)
+        val key = listOf(d.state, d.stateMachine.stateSince, d.inPocket, Net.lanError)
         if (key == notifiedKey) return
         notifiedKey = key
         getSystemService(NotificationManager::class.java).notify(NOTIF_ONGOING, ongoingNotification())
@@ -450,7 +455,8 @@ class PostureService : Service(), SensorEventListener {
             "${p.name.lowercase().replaceFirstChar { it.uppercase() }} · since " +
                 SimpleDateFormat("HH:mm", Locale.US).format(Date(since))
         } else "Detecting…"
-        val text = (if (d.inPocket) "" else "Paused (out of pocket) · ") + "Wrong? Tap what you were doing"
+        val text = (if (d.inPocket) "" else "Paused (out of pocket) · ") +
+            (Net.lanError?.let { "LAN listener unreachable · " } ?: "") + "Wrong? Tap what you were doing"
         return NotificationCompat.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_posture)
             .setContentTitle(title)

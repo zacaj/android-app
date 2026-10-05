@@ -15,6 +15,11 @@ class Settings(context: Context) {
         get() = p.getString("lanUrl", "")!!
         set(v) = p.edit { putString("lanUrl", v.trim().trimEnd('/')) }
 
+    /** Only POST to the LAN listener while on Wi-Fi/Ethernet. */
+    var lanWifiOnly: Boolean
+        get() = p.getBoolean("lanWifiOnly", true)
+        set(v) = p.edit { putBoolean("lanWifiOnly", v) }
+
     var notifyOnChange: Boolean
         get() = p.getBoolean("notifyOnChange", false)
         set(v) = p.edit { putBoolean("notifyOnChange", v) }

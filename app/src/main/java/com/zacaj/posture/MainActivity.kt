@@ -153,6 +153,7 @@ class MainActivity : ComponentActivity() {
     private fun SettingsForm(s: Settings) {
         var lanUrl by remember { mutableStateOf(s.lanUrl) }
         var notifyChange by remember { mutableStateOf(s.notifyOnChange) }
+        var wifiOnly by remember { mutableStateOf(s.lanWifiOnly) }
         var sit by remember { mutableStateOf(s.limitMin(Posture.SITTING).toString()) }
         var stand by remember { mutableStateOf(s.limitMin(Posture.STANDING).toString()) }
         var repeat by remember { mutableStateOf(s.repeatMin.toString()) }
@@ -166,6 +167,7 @@ class MainActivity : ComponentActivity() {
         Text("Settings", style = MaterialTheme.typography.titleMedium)
         Field("LAN listener URL (http://host:8765)", lanUrl) { lanUrl = it }
         Toggle("Notify on every state change", notifyChange) { notifyChange = it }
+        Toggle("Only contact LAN listener on Wi-Fi", wifiOnly) { wifiOnly = it }
         Field("Sitting alert after (min, 0=off)", sit, number = true) { sit = it }
         Field("Standing alert after (min, 0=off)", stand, number = true) { stand = it }
         Field("Repeat alert every (min)", repeat, number = true) { repeat = it }
@@ -178,6 +180,7 @@ class MainActivity : ComponentActivity() {
         Button({
             s.lanUrl = lanUrl
             s.notifyOnChange = notifyChange
+            s.lanWifiOnly = wifiOnly
             s.setLimitMin(Posture.SITTING, sit.toIntOrNull() ?: 0)
             s.setLimitMin(Posture.STANDING, stand.toIntOrNull() ?: 0)
             s.repeatMin = repeat.toIntOrNull() ?: 15
