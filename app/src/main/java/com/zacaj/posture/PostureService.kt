@@ -221,6 +221,7 @@ class PostureService : Service(), SensorEventListener {
                         inPocket = d.inPocket,
                     )
                     refreshNotification()
+                    checkPhoneUse(t)
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
@@ -237,6 +238,33 @@ class PostureService : Service(), SensorEventListener {
                     onCalibrationProximity(near)
                 }
             }
+        }
+    }
+
+    private var phoneUseStart: Long? = null
+    private var phoneUseLastSeen = 0L
+    private var phoneUseAlertAt: Long? = null
+
+    /** Out of pocket with the screen on = using the phone; nag after [Settings.phoneUseLimitMin]. */
+    private fun checkPhoneUse(t: Long) {
+        val limitMin = settings.phoneUseLimitMin
+        val using = !detector.inPocket && getSystemService(PowerManager::class.java).isInteractive
+        if (limitMin <= 0 || !using) return
+        // Short screen-offs / pocket dips don't end a session.
+        if (phoneUseStart == null || t - phoneUseLastSeen > PHONE_USE_GAP_MS) {
+            phoneUseStart = t
+            phoneUseAlertAt = null
+        }
+        phoneUseLastSeen = t
+        val dur = t - phoneUseStart!!
+        val last = phoneUseAlertAt
+        if (dur < limitMin * 60_000L || (last != null && t - last < settings.repeatMin.coerceAtLeast(1) * 60_000L)) return
+        phoneUseAlertAt = t
+        alert(CHANNEL_ALERTS, NOTIF_PHONE_USE, "On your phone for ${dur / 60_000} min", "Put it down for a bit")
+        if (settings.lanUrl.isNotBlank()) {
+            val json = JSONObject().put("t", t).put("device", settings.deviceName).put("type", "phone_use")
+                .put("durationMs", dur)
+            Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
         }
     }
 
@@ -494,6 +522,8 @@ class PostureService : Service(), SensorEventListener {
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_ALERT = 2
         private const val NOTIF_CHANGE = 3
+        private const val NOTIF_PHONE_USE = 4
+        private const val PHONE_USE_GAP_MS = 2 * 60_000L
 
         private val _status = MutableStateFlow(Status())
         val status: StateFlow<Status> = _status

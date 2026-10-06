@@ -34,6 +34,11 @@ class Settings(context: Context) {
         get() = p.getInt("heartbeatMin", 5)
         set(v) = p.edit { putInt("heartbeatMin", v) }
 
+    /** Alert after this many minutes of continuous phone use (out of pocket, screen on); 0 disables. */
+    var phoneUseLimitMin: Int
+        get() = p.getInt("phoneUseLimitMin", 30)
+        set(v) = p.edit { putInt("phoneUseLimitMin", v) }
+
     var repeatMin: Int
         get() = p.getInt("repeatMin", 15)
         set(v) = p.edit { putInt("repeatMin", v) }

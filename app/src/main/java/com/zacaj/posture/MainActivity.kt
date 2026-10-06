@@ -157,6 +157,7 @@ class MainActivity : ComponentActivity() {
         var sit by remember { mutableStateOf(s.limitMin(Posture.SITTING).toString()) }
         var stand by remember { mutableStateOf(s.limitMin(Posture.STANDING).toString()) }
         var repeat by remember { mutableStateOf(s.repeatMin.toString()) }
+        var phoneUse by remember { mutableStateOf(s.phoneUseLimitMin.toString()) }
         var heartbeat by remember { mutableStateOf(s.heartbeatMin.toString()) }
         var record by remember { mutableStateOf(s.recordTraces) }
         var lanTraces by remember { mutableStateOf(s.lanTraceUpload) }
@@ -171,6 +172,7 @@ class MainActivity : ComponentActivity() {
         Field("Sitting alert after (min, 0=off)", sit, number = true) { sit = it }
         Field("Standing alert after (min, 0=off)", stand, number = true) { stand = it }
         Field("Repeat alert every (min)", repeat, number = true) { repeat = it }
+        Field("Phone use alert after (min, 0 = off)", phoneUse, number = true) { phoneUse = it }
         Field("LAN heartbeat every (min, 0 = off)", heartbeat, number = true) { heartbeat = it }
         Toggle("Record sensor traces", record) { record = it }
         Toggle("Upload traces to LAN listener", lanTraces) { lanTraces = it }
@@ -184,6 +186,7 @@ class MainActivity : ComponentActivity() {
             s.setLimitMin(Posture.SITTING, sit.toIntOrNull() ?: 0)
             s.setLimitMin(Posture.STANDING, stand.toIntOrNull() ?: 0)
             s.repeatMin = repeat.toIntOrNull() ?: 15
+            s.phoneUseLimitMin = phoneUse.toIntOrNull() ?: 0
             s.heartbeatMin = heartbeat.toIntOrNull() ?: 0
             s.recordTraces = record
             s.lanTraceUpload = lanTraces
