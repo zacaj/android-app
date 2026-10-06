@@ -433,6 +433,8 @@ class PostureService : Service(), SensorEventListener {
             is DetectorEvent.StateChanged -> {
                 recorder?.write(TraceEvent.State(ev.tMs, ev.to))
                 json.put("type", "state").put("from", ev.from.name).put("to", ev.to.name).put("since", ev.since)
+                // The too-long reminder is moot once the state changes.
+                getSystemService(NotificationManager::class.java).cancel(NOTIF_ALERT)
                 refreshNotification()
                 if (settings.notifyOnChange && ev.from != Posture.UNKNOWN) {
                     alert(CHANNEL_CHANGES, NOTIF_CHANGE, "Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
@@ -440,6 +442,7 @@ class PostureService : Service(), SensorEventListener {
             }
             is DetectorEvent.PocketChanged -> {
                 json.put("type", "pocket").put("in", ev.inPocket).put("state", detector.state.name)
+                if (ev.inPocket) getSystemService(NotificationManager::class.java).cancel(NOTIF_PHONE_USE)
                 refreshNotification()
             }
             is DetectorEvent.TooLong -> {
