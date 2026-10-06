@@ -12,6 +12,28 @@ class PostureStateMachine(private val config: DetectorConfig) {
     private var candidateLastSeen = 0L
     private var lastTooLongAt: Long? = null
 
+    /** Out-of-pocket time within the current state; it doesn't count toward too-long. */
+    private var pausedSince: Long? = null
+    private var pausedTotal = 0L
+
+    fun setPaused(tMs: Long, paused: Boolean) {
+        val since = pausedSince
+        if (paused && since == null) pausedSince = tMs
+        if (!paused && since != null) {
+            pausedTotal += tMs - maxOf(since, stateSince)
+            pausedSince = null
+        }
+    }
+
+    /** How long the current state has lasted, excluding out-of-pocket time. */
+    fun activeDuration(tMs: Long): Long =
+        tMs - stateSince - pausedTotal - (pausedSince?.let { tMs - maxOf(it, stateSince) } ?: 0L)
+
+    private fun resetPause(tMs: Long) {
+        pausedTotal = 0
+        if (pausedSince != null) pausedSince = tMs
+    }
+
     private var suppressed: Posture? = null
     private var suppressedUntil = 0L
 
@@ -41,6 +63,7 @@ class PostureStateMachine(private val config: DetectorConfig) {
                 stateSince = candidateSince
                 candidate = null
                 lastTooLongAt = null
+                resetPause(tMs)
             }
         }
         out += tick(tMs)
@@ -51,6 +74,7 @@ class PostureStateMachine(private val config: DetectorConfig) {
     fun restore(state: Posture, since: Long) {
         this.state = state
         stateSince = since
+        resetPause(since)
     }
 
     /** Drop any pending transition (e.g. phone left the pocket). */
@@ -60,7 +84,8 @@ class PostureStateMachine(private val config: DetectorConfig) {
 
     fun tick(tMs: Long): List<DetectorEvent> {
         val limit = config.tooLongMs[state] ?: return emptyList()
-        val dur = tMs - stateSince
+        if (pausedSince != null) return emptyList()
+        val dur = activeDuration(tMs)
         if (dur < limit) return emptyList()
         val last = lastTooLongAt
         if (last != null && tMs - last < config.tooLongRepeatMs) return emptyList()
@@ -115,6 +140,7 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         if (inPocket == this.inPocket) return emptyList()
         this.inPocket = inPocket
         if (inPocket) lastPocketInAt = tMs else lastPocketOutAt = tMs
+        stateMachine.setPaused(tMs, !inPocket)
         classifier.reset()
         stateMachine.clearCandidate()
         lastRaw = null

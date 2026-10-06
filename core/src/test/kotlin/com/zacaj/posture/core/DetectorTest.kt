@@ -105,11 +105,17 @@ class PocketTest {
     }
 
     @Test
-    fun `too long timer keeps running while out of pocket`() {
+    fun `too long timer pauses while out of pocket`() {
         val config = DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 60_000))
         val gen = SyntheticTrace(seed = 7).segment(Posture.SITTING, 20_000).inHand(60_000)
+        val none = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
+        assertEquals(0, none.size)
+        // back in the pocket, sitting: only in-pocket time counts toward the limit
+        gen.segment(Posture.SITTING, 50_000, label = false)
         val alerts = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
         assertEquals(1, alerts.size)
+        val inPocketBefore = alerts[0].durationMs
+        assertTrue(inPocketBefore in 60_000..70_000, "duration $inPocketBefore")
     }
 }
 
