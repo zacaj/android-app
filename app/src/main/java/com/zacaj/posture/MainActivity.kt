@@ -124,16 +124,6 @@ class MainActivity : ComponentActivity() {
                     }) { Text("Start") }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (status.running) {
-                    Button({ PostureService.send(this@MainActivity, PostureService.ACTION_STOP) }) { Text("Stop") }
-                } else {
-                    Button({
-                        requestBatteryExemption()
-                        PostureService.send(this@MainActivity, PostureService.ACTION_START)
-                    }) { Text("Start") }
-                }
-            }
             LoadChart(history, s.limitMin(Posture.SITTING), s.limitMin(Posture.STANDING), maxOf(now, history.lastOrNull()?.t ?: 0))
             Text("Wrong? Mark the latest stretch as:")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
