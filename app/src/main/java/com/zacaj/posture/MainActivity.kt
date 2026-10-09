@@ -39,6 +39,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.delay
 import com.zacaj.posture.core.Posture
 import com.zacaj.posture.core.Segment
 import java.text.SimpleDateFormat
@@ -72,11 +77,14 @@ class MainActivity : ComponentActivity() {
     private fun Screen(s: Settings) {
         val status by PostureService.status.collectAsState()
         val message by Feedback.message.collectAsState()
-        Column(
-            Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(verticalAlignment = Alignment.Bottom) {
+        var tab by rememberSaveable { mutableStateOf(0) }
+        val history by PostureService.history.collectAsState()
+        // Re-render periodically so the chart's time axis keeps moving.
+        val now by produceState(System.currentTimeMillis()) {
+            while (true) { delay(30_000); value = System.currentTimeMillis() }
+        }
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 8.dp)) {
                 Text("Posture: ${status.posture.name.lowercase()}", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     "  v${BuildConfig.VERSION_NAME}",
@@ -87,6 +95,18 @@ class MainActivity : ComponentActivity() {
             if (message.isNotEmpty()) {
                 Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
             }
+            TabRow(tab) {
+                listOf("Now", "History", "Setup").forEachIndexed { i, t ->
+                    Tab(tab == i, { tab = i }, text = { Text(t) })
+                }
+            }
+        }
+        Column(
+            Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (tab) {
+                0 -> {
             if (status.running) {
                 val mins = if (status.since > 0) (System.currentTimeMillis() - status.since) / 60_000 else 0
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
@@ -104,6 +124,36 @@ class MainActivity : ComponentActivity() {
                     }) { Text("Start") }
                 }
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (status.running) {
+                    Button({ PostureService.send(this@MainActivity, PostureService.ACTION_STOP) }) { Text("Stop") }
+                } else {
+                    Button({
+                        requestBatteryExemption()
+                        PostureService.send(this@MainActivity, PostureService.ACTION_START)
+                    }) { Text("Start") }
+                }
+            }
+            LoadChart(history, s.limitMin(Posture.SITTING), s.limitMin(Posture.STANDING), maxOf(now, history.lastOrNull()?.t ?: 0))
+            Text("Wrong? Mark the latest stretch as:")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(Posture.SITTING, Posture.STANDING, Posture.WALKING).forEach { p ->
+                    OutlinedButton({
+                        PostureService.send(this@MainActivity, PostureService.ACTION_LABEL) {
+                            putExtra(PostureService.EXTRA_LABEL, p.name)
+                        }
+                    }) { Text(p.name.lowercase()) }
+                }
+            }
+                }
+                1 -> {
+            if (status.segments.isEmpty()) Text("No stretches yet.")
+            if (status.segments.isNotEmpty()) {
+                Text("Recent (tap a letter to relabel):", style = MaterialTheme.typography.titleSmall)
+                status.segments.asReversed().forEach { seg -> SegmentRow(seg) }
+            }
+                }
+                else -> {
             Text("Calibrate: tap, then pocket the phone and hold still. Buzz = recording, double buzz = done.")
             status.calibration?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -121,21 +171,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Text("Wrong? Mark the latest stretch as:")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(Posture.SITTING, Posture.STANDING, Posture.WALKING).forEach { p ->
-                    OutlinedButton({
-                        PostureService.send(this@MainActivity, PostureService.ACTION_LABEL) {
-                            putExtra(PostureService.EXTRA_LABEL, p.name)
-                        }
-                    }) { Text(p.name.lowercase()) }
-                }
-            }
-            if (status.segments.isNotEmpty()) {
-                HorizontalDivider()
-                Text("Recent (tap a letter to relabel):", style = MaterialTheme.typography.titleSmall)
-                status.segments.asReversed().forEach { seg -> SegmentRow(seg) }
-            }
             OutlinedButton({ PostureService.send(this@MainActivity, PostureService.ACTION_FLUSH) }) {
                 Text("Close trace & upload now")
             }
@@ -147,6 +182,8 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )
+                }
+            }
         }
     }
 

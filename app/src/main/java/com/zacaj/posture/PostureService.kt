@@ -35,6 +35,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+data class HistPoint(val t: Long, val state: Posture, val inPocket: Boolean, val sitLoadMs: Long, val standLoadMs: Long)
+
 data class Status(
     val running: Boolean = false,
     val posture: Posture = Posture.UNKNOWN,
@@ -227,6 +229,7 @@ class PostureService : Service(), SensorEventListener {
                     )
                     refreshNotification()
                     checkPhoneUse(t)
+                    recordHistory(t, force = false)
                 }
             }
             Sensor.TYPE_GYROSCOPE -> {
@@ -271,6 +274,16 @@ class PostureService : Service(), SensorEventListener {
                 .put("durationMs", dur)
             Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
         }
+    }
+
+    private var lastHistAt = 0L
+
+    private fun recordHistory(t: Long, force: Boolean) {
+        if (!force && t - lastHistAt < HIST_EVERY_MS) return
+        lastHistAt = t
+        val d = detector
+        val p = HistPoint(t, d.state, d.inPocket, d.loads.load(Posture.SITTING), d.loads.load(Posture.STANDING))
+        _history.value = (_history.value + p).dropWhile { it.t < t - HIST_KEEP_MS }
     }
 
     private val segLog = SegmentLog()
@@ -435,7 +448,10 @@ class PostureService : Service(), SensorEventListener {
     private fun handle(ev: DetectorEvent) {
         Log.i(TAG, "event $ev")
         segLog.onEvent(ev)
-        if (ev is DetectorEvent.StateChanged || ev is DetectorEvent.PocketChanged) publishSegments()
+        if (ev is DetectorEvent.StateChanged || ev is DetectorEvent.PocketChanged) {
+            publishSegments()
+            recordHistory(ev.tMs, force = true)
+        }
         val json = JSONObject().put("t", ev.tMs).put("device", settings.deviceName)
         when (ev) {
             is DetectorEvent.StateChanged -> {
@@ -542,6 +558,12 @@ class PostureService : Service(), SensorEventListener {
         private const val NOTIF_CHANGE = 3
         private const val NOTIF_PHONE_USE = 4
         private const val PHONE_USE_GAP_MS = 2 * 60_000L
+
+        private val _history = MutableStateFlow<List<HistPoint>>(emptyList())
+        /** Recent posture + load samples for the chart (in memory; cleared when the service stops). */
+        val history: StateFlow<List<HistPoint>> = _history
+        private const val HIST_EVERY_MS = 30_000L
+        private const val HIST_KEEP_MS = 24 * 3600_000L
 
         private val _status = MutableStateFlow(Status())
         val status: StateFlow<Status> = _status

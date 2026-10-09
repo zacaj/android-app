@@ -96,6 +96,10 @@ sleep 3
 adb shell "run-as $PKG ls files/traces/ready files/traces/uploaded 2>/dev/null" | tee "$OUT/trace-files.txt"
 grep -q 'trace-.*\.csv\.gz' "$OUT/trace-files.txt" || { echo "FAIL: no trace file"; exit 1; }
 
+# Screenshot the main screen (chart) for eyeballing; not a pass/fail check.
+adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+adb shell am start -n $PKG/.MainActivity > /dev/null && sleep 4 && adb exec-out screencap -p > "$OUT/screen-now.png" || true
+
 adb shell am start-foreground-service -n $PKG/.PostureService -a $PKG.STOP
 echo "e2e OK"
 cat "$OUT/events.jsonl"
