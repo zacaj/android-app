@@ -1,6 +1,6 @@
 package com.zacaj.posture.core
 
-/** Debounces raw classifications into a stable state and fires too-long alerts. */
+/** Debounces raw classifications into a stable state. Too-long alerts live in [LoadTracker]. */
 class PostureStateMachine(private val config: DetectorConfig) {
     var state: Posture = Posture.UNKNOWN
         private set
@@ -10,29 +10,6 @@ class PostureStateMachine(private val config: DetectorConfig) {
     private var candidate: Posture? = null
     private var candidateSince = 0L
     private var candidateLastSeen = 0L
-    private var lastTooLongAt: Long? = null
-
-    /** Out-of-pocket time within the current state; it doesn't count toward too-long. */
-    private var pausedSince: Long? = null
-    private var pausedTotal = 0L
-
-    fun setPaused(tMs: Long, paused: Boolean) {
-        val since = pausedSince
-        if (paused && since == null) pausedSince = tMs
-        if (!paused && since != null) {
-            pausedTotal += tMs - maxOf(since, stateSince)
-            pausedSince = null
-        }
-    }
-
-    /** How long the current state has lasted, excluding out-of-pocket time. */
-    fun activeDuration(tMs: Long): Long =
-        tMs - stateSince - pausedTotal - (pausedSince?.let { tMs - maxOf(it, stateSince) } ?: 0L)
-
-    private fun resetPause(tMs: Long) {
-        pausedTotal = 0
-        if (pausedSince != null) pausedSince = tMs
-    }
 
     private var suppressed: Posture? = null
     private var suppressedUntil = 0L
@@ -62,11 +39,8 @@ class PostureStateMachine(private val config: DetectorConfig) {
                 state = raw
                 stateSince = candidateSince
                 candidate = null
-                lastTooLongAt = null
-                resetPause(tMs)
             }
         }
-        out += tick(tMs)
         return out
     }
 
@@ -74,7 +48,6 @@ class PostureStateMachine(private val config: DetectorConfig) {
     fun restore(state: Posture, since: Long) {
         this.state = state
         stateSince = since
-        resetPause(since)
     }
 
     /** Drop any pending transition (e.g. phone left the pocket). */
@@ -82,28 +55,19 @@ class PostureStateMachine(private val config: DetectorConfig) {
         candidate = null
     }
 
-    fun tick(tMs: Long): List<DetectorEvent> {
-        val limit = config.tooLongMs[state] ?: return emptyList()
-        if (pausedSince != null) return emptyList()
-        val dur = activeDuration(tMs)
-        if (dur < limit) return emptyList()
-        val last = lastTooLongAt
-        if (last != null && tMs - last < config.tooLongRepeatMs) return emptyList()
-        lastTooLongAt = tMs
-        return listOf(DetectorEvent.TooLong(tMs, state, dur))
-    }
 }
 
 /** Classifier + state machine. Not thread-safe; feed from one thread. */
 class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
     val classifier = PostureClassifier(config)
     val stateMachine = PostureStateMachine(config)
+    val loads = LoadTracker(config)
     var lastRaw: Posture? = null
         private set
 
     /**
      * Whether the phone is in a pocket (proximity covered). While out, orientation says nothing
-     * about posture: the state is frozen (too-long timers keep running) and the window is
+     * about posture: the state and posture loads are frozen, and the window is
      * cleared on re-entry so pull-out/put-back motion isn't classified.
      */
     var inPocket: Boolean = true
@@ -140,11 +104,10 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         if (inPocket == this.inPocket) return emptyList()
         this.inPocket = inPocket
         if (inPocket) lastPocketInAt = tMs else lastPocketOutAt = tMs
-        stateMachine.setPaused(tMs, !inPocket)
         classifier.reset()
         stateMachine.clearCandidate()
         lastRaw = null
-        return listOf(DetectorEvent.PocketChanged(tMs, inPocket)) + stateMachine.tick(tMs)
+        return listOf(DetectorEvent.PocketChanged(tMs, inPocket))
     }
 
     /**
@@ -179,9 +142,9 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
     fun onAccel(tMs: Long, accel: Vec3): List<DetectorEvent> {
         val pocketEvents = checkPendingOut(tMs)
         if (pocketEvents.isNotEmpty()) return pocketEvents
-        if (!inPocket) return stateMachine.tick(tMs)
+        if (!inPocket) return loads.update(tMs, state, active = false)
         lastRaw = classifier.add(tMs, accel)
-        return stateMachine.onRaw(tMs, lastRaw)
+        return stateMachine.onRaw(tMs, lastRaw) + loads.update(tMs, state, active = true)
     }
 
     /** Gyro feeds the walking check (thigh rotation). */

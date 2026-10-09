@@ -49,9 +49,9 @@ class DetectorTest {
     @Test
     fun `too long fires and repeats`() {
         val config = DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 60_000), tooLongRepeatMs = 30_000)
-        val trace = SyntheticTrace(seed = 4).segment(Posture.SITTING, 125_000).events
+        val trace = SyntheticTrace(seed = 4).segment(Posture.SITTING, 130_000).events
         val alerts = Replay.run(trace, config).events.filterIsInstance<DetectorEvent.TooLong>()
-        // ~60s, ~90s, ~120s
+        // load counts from detection (~5s in): ~65s, ~95s, ~125s
         assertEquals(3, alerts.size, alerts.toString())
         assertTrue(alerts.all { it.state == Posture.SITTING })
     }
@@ -105,7 +105,7 @@ class PocketTest {
     }
 
     @Test
-    fun `too long timer pauses while out of pocket`() {
+    fun `load ignores out of pocket time`() {
         val config = DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 60_000))
         val gen = SyntheticTrace(seed = 7).segment(Posture.SITTING, 20_000).inHand(60_000)
         val none = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
@@ -262,5 +262,49 @@ class SegmentLogTest {
         log.correctCurrent(40_000, Posture.SITTING)
         assertEquals(Segment(40_000, null, Posture.SITTING, Posture.SITTING), log.segments.last())
         assertEquals(3, log.segments.size)
+    }
+}
+
+class LoadTrackerTest {
+    private val min = 60_000L
+    private fun run(lt: LoadTracker, from: Long, toMs: Long, p: Posture, active: Boolean = true): List<DetectorEvent> {
+        val out = mutableListOf<DetectorEvent>()
+        var t = from
+        while (t <= toMs) { out += lt.update(t, p, active); t += 1000 }
+        return out
+    }
+
+    @Test
+    fun `brief standing barely dents sitting load, a real break clears it`() {
+        val lt = LoadTracker(DetectorConfig())
+        run(lt, 0, 30 * min, Posture.SITTING)
+        run(lt, 30 * min + 1000, 30 * min + 10_000, Posture.STANDING)
+        assertTrue(lt.load(Posture.SITTING) in 29 * min..30 * min)
+        // 5 min standing cancels 10 min of sitting
+        run(lt, 30 * min + 11_000, 35 * min + 11_000, Posture.STANDING)
+        assertTrue(lt.load(Posture.SITTING) in 19 * min..20 * min, "${lt.load(Posture.SITTING)}")
+        // 4 min walking (5x) clears the remaining ~20 min
+        val ev = run(lt, 35 * min + 12_000, 39 * min + 12_000, Posture.WALKING)
+        assertEquals(0, lt.load(Posture.SITTING))
+        assertEquals(listOf(Posture.SITTING), ev.filterIsInstance<DetectorEvent.LoadCleared>().map { it.posture })
+    }
+
+    @Test
+    fun `alerts only while in the loaded posture, and ignores inactive time`() {
+        val lt = LoadTracker(DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 10 * min)))
+        assertTrue(run(lt, 0, 9 * min, Posture.SITTING).none { it is DetectorEvent.TooLong })
+        run(lt, 9 * min + 1000, 30 * min, Posture.SITTING, active = false)
+        assertTrue(lt.load(Posture.SITTING) < 10 * min)
+        val ev = run(lt, 30 * min + 1000, 32 * min, Posture.SITTING)
+        assertEquals(1, ev.filterIsInstance<DetectorEvent.TooLong>().size)
+    }
+
+    @Test
+    fun `small loads clearing are not announced`() {
+        val lt = LoadTracker(DetectorConfig())
+        run(lt, 0, 2 * min, Posture.STANDING)
+        val ev = run(lt, 2 * min + 1000, 4 * min, Posture.SITTING)
+        assertEquals(0, lt.load(Posture.STANDING))
+        assertTrue(ev.none { it is DetectorEvent.LoadCleared })
     }
 }

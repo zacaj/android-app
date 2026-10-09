@@ -23,7 +23,11 @@ sealed interface DetectorEvent {
     /** [since] is when the new state is judged to have started (before debounce). */
     data class StateChanged(override val tMs: Long, val from: Posture, val to: Posture, val since: Long) : DetectorEvent
 
+    /** [durationMs] is the accumulated load (see [LoadTracker]), not time in the current stretch. */
     data class TooLong(override val tMs: Long, val state: Posture, val durationMs: Long) : DetectorEvent
+
+    /** A posture's load drained back to zero after a meaningful build-up: a real break. */
+    data class LoadCleared(override val tMs: Long, val posture: Posture) : DetectorEvent
 
     /** Debounced pocket change; detection is paused while [inPocket] is false. */
     data class PocketChanged(override val tMs: Long, val inPocket: Boolean) : DetectorEvent
@@ -98,7 +102,16 @@ data class DetectorConfig(
      */
     val walkGapToleranceMs: Long = 3000,
     /** Alert once a state has lasted this long (absent = never). */
-    val tooLongMs: Map<Posture, Long> = mapOf(Posture.SITTING to 45 * 60_000L),
+    val tooLongMs: Map<Posture, Long> = mapOf(Posture.SITTING to 45 * 60_000L, Posture.STANDING to 45 * 60_000L),
+    /** (load, current posture) -> drain multiplier. 5 min standing clears 10 min of sitting, etc. */
+    val drainRates: Map<Pair<Posture, Posture>, Float> = mapOf(
+        (Posture.SITTING to Posture.STANDING) to 2f,
+        (Posture.SITTING to Posture.WALKING) to 5f,
+        (Posture.STANDING to Posture.SITTING) to 3f,
+        (Posture.STANDING to Posture.WALKING) to 3f,
+    ),
+    /** Only announce a load reaching zero if it had built up at least this much. */
+    val loadClearMinMs: Long = 10 * 60_000L,
     /** Re-alert interval while still in a too-long state. */
     val tooLongRepeatMs: Long = 15 * 60_000L,
 )

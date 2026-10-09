@@ -23,7 +23,7 @@ class SegmentLog(private val max: Int = 30) {
                 inPocket = ev.inPocket
                 if (ev.inPocket) open(ev.tMs, state) else close(ev.tMs)
             }
-            is DetectorEvent.TooLong -> {}
+            is DetectorEvent.TooLong, is DetectorEvent.LoadCleared -> {}
         }
     }
 

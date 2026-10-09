@@ -24,9 +24,9 @@ class Settings(context: Context) {
         get() = p.getBoolean("notifyOnChange", false)
         set(v) = p.edit { putBoolean("notifyOnChange", v) }
 
-    /** Too-long thresholds in minutes, 0 = off. */
+    /** Load limits in minutes (see LoadTracker), 0 = off. */
     fun limitMin(posture: Posture): Int =
-        p.getInt("limit_$posture", if (posture == Posture.SITTING) 45 else 0)
+        p.getInt("limit_$posture", if (posture == Posture.SITTING || posture == Posture.STANDING) 45 else 0)
     fun setLimitMin(posture: Posture, v: Int) = p.edit { putInt("limit_$posture", v) }
 
     /** Minutes between heartbeat POSTs to the LAN listener; 0 disables. */

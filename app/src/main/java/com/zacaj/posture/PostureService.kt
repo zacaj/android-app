@@ -45,6 +45,8 @@ data class Status(
     val inPocket: Boolean = true,
     /** Calibration progress text, null when idle. */
     val calibration: String? = null,
+    val sitLoadMs: Long = 0,
+    val standLoadMs: Long = 0,
     /** Recent detected stretches, newest last. */
     val segments: List<Segment> = emptyList(),
 )
@@ -179,6 +181,7 @@ class PostureService : Service(), SensorEventListener {
             val old = detector
             detector = PostureDetector(settings.detectorConfig()).apply {
                 stateMachine.restore(old.state, old.stateMachine.stateSince)
+                loads.restore(old.loads)
                 onPocket(System.currentTimeMillis(), proximityNear)
             }
             Log.i(TAG, "config ${detector.config}")
@@ -219,6 +222,8 @@ class PostureService : Service(), SensorEventListener {
                         tiltDeg = d.classifier.tiltDeg,
                         motionStd = d.classifier.magnitudeStd,
                         inPocket = d.inPocket,
+                        sitLoadMs = d.loads.load(Posture.SITTING),
+                        standLoadMs = d.loads.load(Posture.STANDING),
                     )
                     refreshNotification()
                     checkPhoneUse(t)
@@ -333,7 +338,10 @@ class PostureService : Service(), SensorEventListener {
     /** Re-post the ongoing notification if state, start time or pocket status changed. */
     private fun refreshNotification() {
         val d = detector
-        val key = listOf(d.state, d.stateMachine.stateSince, d.inPocket, Net.lanError)
+        val key = listOf(
+            d.state, d.stateMachine.stateSince, d.inPocket, Net.lanError,
+            d.loads.load(Posture.SITTING) / 60_000, d.loads.load(Posture.STANDING) / 60_000,
+        )
         if (key == notifiedKey) return
         notifiedKey = key
         getSystemService(NotificationManager::class.java).notify(NOTIF_ONGOING, ongoingNotification())
@@ -427,7 +435,7 @@ class PostureService : Service(), SensorEventListener {
     private fun handle(ev: DetectorEvent) {
         Log.i(TAG, "event $ev")
         segLog.onEvent(ev)
-        if (ev !is DetectorEvent.TooLong) publishSegments()
+        if (ev is DetectorEvent.StateChanged || ev is DetectorEvent.PocketChanged) publishSegments()
         val json = JSONObject().put("t", ev.tMs).put("device", settings.deviceName)
         when (ev) {
             is DetectorEvent.StateChanged -> {
@@ -447,7 +455,12 @@ class PostureService : Service(), SensorEventListener {
             }
             is DetectorEvent.TooLong -> {
                 json.put("type", "too_long").put("state", ev.state.name).put("durationMs", ev.durationMs)
-                alert(CHANNEL_ALERTS, NOTIF_ALERT, "${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} for ${ev.durationMs / 60_000} min", "Time to change it up")
+                alert(CHANNEL_ALERTS, NOTIF_ALERT, "${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} load ${ev.durationMs / 60_000} min", "Time to change it up")
+            }
+            is DetectorEvent.LoadCleared -> {
+                json.put("type", "load_cleared").put("posture", ev.posture.name)
+                Haptics.cleared(this)
+                refreshNotification()
             }
         }
         if (settings.lanUrl.isNotBlank()) Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
@@ -486,7 +499,9 @@ class PostureService : Service(), SensorEventListener {
             "${p.name.lowercase().replaceFirstChar { it.uppercase() }} · since " +
                 SimpleDateFormat("HH:mm", Locale.US).format(Date(since))
         } else "Detecting…"
-        val text = (if (d.inPocket) "" else "Paused (out of pocket) · ") +
+        fun load(p: Posture) = "${d.loads.load(p) / 60_000}" + (settings.limitMin(p).takeIf { it > 0 }?.let { "/$it" } ?: "")
+        val text = "Sit ${load(Posture.SITTING)} · Stand ${load(Posture.STANDING)} min · " +
+            (if (d.inPocket) "" else "Paused (out of pocket) · ") +
             (Net.lanError?.let { "LAN listener unreachable · " } ?: "") + "Wrong? Tap what you were doing"
         return NotificationCompat.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_posture)

@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
             if (status.running) {
                 val mins = if (status.since > 0) (System.currentTimeMillis() - status.since) / 60_000 else 0
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
+                Text("load: sitting ${status.sitLoadMs / 60_000} min · standing ${status.standLoadMs / 60_000} min")
                 Text("tilt %.0f° · motion %.2f".format(status.tiltDeg, status.motionStd))
                 Text(if (status.inPocket) "in pocket" else "out of pocket — detection paused")
             }
@@ -169,8 +170,8 @@ class MainActivity : ComponentActivity() {
         Field("LAN listener URL (http://host:8765)", lanUrl) { lanUrl = it }
         Toggle("Notify on every state change", notifyChange) { notifyChange = it }
         Toggle("Only contact LAN listener on Wi-Fi", wifiOnly) { wifiOnly = it }
-        Field("Sitting alert after (min, 0=off)", sit, number = true) { sit = it }
-        Field("Standing alert after (min, 0=off)", stand, number = true) { stand = it }
+        Field("Sitting load limit (min, 0=off)", sit, number = true) { sit = it }
+        Field("Standing load limit (min, 0=off)", stand, number = true) { stand = it }
         Field("Repeat alert every (min)", repeat, number = true) { repeat = it }
         Field("Phone use alert after (min, 0 = off)", phoneUse, number = true) { phoneUse = it }
         Field("LAN heartbeat every (min, 0 = off)", heartbeat, number = true) { heartbeat = it }
