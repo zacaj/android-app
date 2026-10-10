@@ -20,6 +20,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("lanWifiOnly", true)
         set(v) = p.edit { putBoolean("lanWifiOnly", v) }
 
+    /** Tracking was running when last seen; boot/app-update restarts it only if so. */
+    var trackingEnabled: Boolean
+        get() = p.getBoolean("trackingEnabled", false)
+        set(v) = p.edit { putBoolean("trackingEnabled", v) }
+
     var notifyOnChange: Boolean
         get() = p.getBoolean("notifyOnChange", false)
         set(v) = p.edit { putBoolean("notifyOnChange", v) }

@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zacaj.posture.core.CalibrationSample
@@ -93,6 +94,7 @@ class PostureService : Service(), SensorEventListener {
         )
         when (intent?.action) {
             ACTION_STOP -> {
+                settings.trackingEnabled = false
                 Feedback.show(this, "Tracking stopped")
                 stopSelf(); return START_NOT_STICKY
             }
@@ -136,6 +138,7 @@ class PostureService : Service(), SensorEventListener {
 
     private fun start() {
         started = true
+        settings.trackingEnabled = true
         Net.onLanErrorChanged = { handler.post { refreshNotification() } }
         Log.i(TAG, "starting")
         if (settings.recordTraces) recorder = TraceRecorder(UploadWorker.traceRoot(this))
@@ -170,6 +173,7 @@ class PostureService : Service(), SensorEventListener {
                 val json = JSONObject().put("t", System.currentTimeMillis()).put("device", settings.deviceName)
                     .put("type", "heartbeat").put("state", d.state.name).put("since", d.stateMachine.stateSince)
                     .put("inPocket", d.inPocket).put("version", BuildConfig.VERSION_NAME)
+                withLoads(json)
                 Net.postAsync(this@PostureService, "${settings.lanUrl}/event", json.toString())
             }
             handler.postDelayed(this, min * 60_000L)
@@ -201,6 +205,7 @@ class PostureService : Service(), SensorEventListener {
         }
         wakeLock?.takeIf { it.isHeld }?.release()
         _status.value = Status()
+        WidgetProvider.refresh(this)
         super.onDestroy()
     }
 
@@ -354,10 +359,12 @@ class PostureService : Service(), SensorEventListener {
         val key = listOf(
             d.state, d.stateMachine.stateSince, d.inPocket, Net.lanError,
             d.loads.load(Posture.SITTING) / 60_000, d.loads.load(Posture.STANDING) / 60_000,
+            _history.value.lastOrNull()?.t,
         )
         if (key == notifiedKey) return
         notifiedKey = key
         getSystemService(NotificationManager::class.java).notify(NOTIF_ONGOING, ongoingNotification())
+        WidgetProvider.refresh(this)
     }
 
     // --- calibration ---
@@ -452,7 +459,7 @@ class PostureService : Service(), SensorEventListener {
             publishSegments()
             recordHistory(ev.tMs, force = true)
         }
-        val json = JSONObject().put("t", ev.tMs).put("device", settings.deviceName)
+        val json = withLoads(JSONObject().put("t", ev.tMs).put("device", settings.deviceName))
         when (ev) {
             is DetectorEvent.StateChanged -> {
                 recorder?.write(TraceEvent.State(ev.tMs, ev.to))
@@ -481,6 +488,10 @@ class PostureService : Service(), SensorEventListener {
         }
         if (settings.lanUrl.isNotBlank()) Net.postAsync(this, "${settings.lanUrl}/event", json.toString())
     }
+
+    private fun withLoads(json: JSONObject): JSONObject = json
+        .put("sitLoadMs", detector.loads.load(Posture.SITTING)).put("standLoadMs", detector.loads.load(Posture.STANDING))
+        .put("sitLimitMin", settings.limitMin(Posture.SITTING)).put("standLimitMin", settings.limitMin(Posture.STANDING))
 
     private fun alert(channel: String, id: Int, title: String, text: String) {
         val n = NotificationCompat.Builder(this, channel)
@@ -519,10 +530,22 @@ class PostureService : Service(), SensorEventListener {
         val text = "Sit ${load(Posture.SITTING)} · Stand ${load(Posture.STANDING)} min · " +
             (if (d.inPocket) "" else "Paused (out of pocket) · ") +
             (Net.lanError?.let { "LAN listener unreachable · " } ?: "") + "Wrong? Tap what you were doing"
+        val chart = MiniCharts.strip(
+            _history.value, System.currentTimeMillis(),
+            settings.limitMin(Posture.SITTING), settings.limitMin(Posture.STANDING),
+        )
+        val views = RemoteViews(packageName, R.layout.notif_ongoing).apply {
+            setImageViewBitmap(R.id.notif_chart, chart)
+            setTextViewText(R.id.notif_title, title)
+            setTextViewText(R.id.notif_text, text)
+        }
         return NotificationCompat.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_posture)
             .setContentTitle(title)
             .setContentText(text)
+            // Last 2h of posture bands + load lines behind the text.
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(views)
             // Live elapsed timer since the state began, without re-posting.
             .setShowWhen(known)
             .setWhen(if (known) since else System.currentTimeMillis())
