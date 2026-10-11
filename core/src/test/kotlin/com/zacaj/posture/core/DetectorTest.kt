@@ -105,17 +105,15 @@ class PocketTest {
     }
 
     @Test
-    fun `load ignores out of pocket time`() {
+    fun `out of pocket time drains load instead of adding to it`() {
         val config = DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 60_000))
-        val gen = SyntheticTrace(seed = 7).segment(Posture.SITTING, 20_000).inHand(60_000)
-        val none = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
-        assertEquals(0, none.size)
-        // back in the pocket, sitting: only in-pocket time counts toward the limit
-        gen.segment(Posture.SITTING, 50_000, label = false)
-        val alerts = Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>()
-        assertEquals(1, alerts.size)
-        val inPocketBefore = alerts[0].durationMs
-        assertTrue(inPocketBefore in 60_000..70_000, "duration $inPocketBefore")
+        val gen = SyntheticTrace(seed = 7).segment(Posture.SITTING, 50_000).inHand(20_000)
+        assertEquals(0, Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>().size)
+        // ~45s of load, minus ~20s out of pocket; needs ~35s more sitting to reach the limit
+        gen.segment(Posture.SITTING, 25_000, label = false)
+        assertEquals(0, Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>().size)
+        gen.segment(Posture.SITTING, 30_000, label = false)
+        assertEquals(1, Replay.run(gen.events, config).events.filterIsInstance<DetectorEvent.TooLong>().size)
     }
 }
 
@@ -290,13 +288,26 @@ class LoadTrackerTest {
     }
 
     @Test
-    fun `alerts only while in the loaded posture, and ignores inactive time`() {
+    fun `inactive time drains both loads and never alerts`() {
         val lt = LoadTracker(DetectorConfig(tooLongMs = mapOf(Posture.SITTING to 10 * min)))
         assertTrue(run(lt, 0, 9 * min, Posture.SITTING).none { it is DetectorEvent.TooLong })
-        run(lt, 9 * min + 1000, 30 * min, Posture.SITTING, active = false)
-        assertTrue(lt.load(Posture.SITTING) < 10 * min)
-        val ev = run(lt, 30 * min + 1000, 32 * min, Posture.SITTING)
-        assertEquals(1, ev.filterIsInstance<DetectorEvent.TooLong>().size)
+        val ev = run(lt, 9 * min + 1000, 13 * min, Posture.SITTING, active = false)
+        assertTrue(ev.none { it is DetectorEvent.TooLong })
+        assertTrue(lt.load(Posture.SITTING) in 5 * min..5 * min + 2000, "${lt.load(Posture.SITTING)}")
+        val ev2 = run(lt, 13 * min + 1000, 18 * min + 2000, Posture.SITTING)
+        assertEquals(1, ev2.filterIsInstance<DetectorEvent.TooLong>().size)
+    }
+
+    @Test
+    fun `load is capped at what the other posture can clear within its limit`() {
+        val lt = LoadTracker(DetectorConfig())
+        // standing limit 45 min x 2 drain = 90 min max sitting load
+        run(lt, 0, 3 * 60 * min, Posture.SITTING)
+        assertEquals(90 * min, lt.load(Posture.SITTING))
+        run(lt, 3 * 60 * min + 1000, 3 * 60 * min + 45 * min, Posture.STANDING)
+        assertTrue(lt.load(Posture.SITTING) < 2000, "${lt.load(Posture.SITTING)}")
+        // sitting limit 45 x 3 = 135 min max standing load
+        assertEquals(135 * min, LoadTracker(DetectorConfig()).cap(Posture.STANDING))
     }
 
     @Test

@@ -110,6 +110,8 @@ data class DetectorConfig(
         (Posture.STANDING to Posture.SITTING) to 3f,
         (Posture.STANDING to Posture.WALKING) to 3f,
     ),
+    /** Drain rate for both loads while out of pocket / unknown: could be doing anything, so assume some recovery. */
+    val unknownDrainRate: Float = 1f,
     /** Only announce a load reaching zero if it had built up at least this much. */
     val loadClearMinMs: Long = 10 * 60_000L,
     /** Re-alert interval while still in a too-long state. */

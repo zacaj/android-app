@@ -3,7 +3,12 @@ package com.zacaj.posture.core
 /**
  * Accumulated "load" for sitting and standing: fills 1:1 while in that posture and drains at
  * [DetectorConfig.drainRates] while doing something else, so a few seconds of another posture
- * barely counts but a proper break clears it. Out-of-pocket time is ignored (posture unknown).
+ * barely counts but a proper break clears it. Out-of-pocket / unknown time drains both at
+ * [DetectorConfig.unknownDrainRate].
+ *
+ * Each load is capped at what the other posture can clear without itself hitting its limit
+ * (e.g. sitting ≤ standing limit × standing's drain rate on sitting), so a long stretch can't
+ * build a debt that would need an unhealthy stretch of the other posture to pay off.
  */
 class LoadTracker(private val config: DetectorConfig) {
     val loadMs = mutableMapOf(Posture.SITTING to 0L, Posture.STANDING to 0L)
@@ -17,13 +22,15 @@ class LoadTracker(private val config: DetectorConfig) {
     fun update(tMs: Long, state: Posture, active: Boolean): List<DetectorEvent> {
         val prev = lastT
         lastT = tMs
-        if (prev == null || !active || state == Posture.UNKNOWN) return emptyList()
+        if (prev == null) return emptyList()
+        val known = active && state != Posture.UNKNOWN
         val dt = (tMs - prev).coerceIn(0, 60_000)
         val out = mutableListOf<DetectorEvent>()
         for (p in loadMs.keys) {
             val before = load(p)
-            val after = if (p == state) before + dt
-            else (before - (dt * (config.drainRates[p to state] ?: 1f)).toLong()).coerceAtLeast(0)
+            val rate = if (known) config.drainRates[p to state] ?: 1f else config.unknownDrainRate
+            val after = if (known && p == state) minOf(before + dt, maxOf(before, cap(p)))
+            else (before - (dt * rate).toLong()).coerceAtLeast(0)
             loadMs[p] = after
             if (after > (peak[p] ?: 0)) peak[p] = after
             if (after == 0L && before > 0) {
@@ -32,13 +39,20 @@ class LoadTracker(private val config: DetectorConfig) {
                 lastAlertAt.remove(p)
             }
             val limit = config.tooLongMs[p] ?: continue
-            if (p != state || after < limit) continue
+            if (!known || p != state || after < limit) continue
             val last = lastAlertAt[p]
             if (last != null && tMs - last < config.tooLongRepeatMs) continue
             lastAlertAt[p] = tMs
             out += DetectorEvent.TooLong(tMs, p, after)
         }
         return out
+    }
+
+    /** Max load for [p]: the other posture's limit times its drain rate on [p]; uncapped if that limit is off. */
+    fun cap(p: Posture): Long {
+        val other = if (p == Posture.SITTING) Posture.STANDING else Posture.SITTING
+        val otherLimit = config.tooLongMs[other] ?: return Long.MAX_VALUE
+        return (otherLimit * (config.drainRates[p to other] ?: 1f)).toLong()
     }
 
     fun restore(other: LoadTracker) {
