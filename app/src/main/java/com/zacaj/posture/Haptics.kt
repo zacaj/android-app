@@ -12,9 +12,6 @@ object Haptics {
     fun success(ctx: Context) = cue(ctx, longArrayOf(0, 120, 120, 120), ToneGenerator.TONE_PROP_ACK)
     fun failure(ctx: Context) = cue(ctx, longArrayOf(0, 700), ToneGenerator.TONE_PROP_NACK)
 
-    /** A posture's load drained to zero: three quick taps, no sound. */
-    fun cleared(ctx: Context) = cue(ctx, longArrayOf(0, 60, 90, 60, 90, 60), null)
-
     private fun cue(ctx: Context, pattern: LongArray, tone: Int?) {
         val vm = ctx.getSystemService(VibratorManager::class.java)
         if (vm != null) vm.defaultVibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))

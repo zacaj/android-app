@@ -482,7 +482,8 @@ class PostureService : Service(), SensorEventListener {
             }
             is DetectorEvent.LoadCleared -> {
                 json.put("type", "load_cleared").put("posture", ev.posture.name)
-                Haptics.cleared(this)
+                // Own channel so its sound/vibration can be set apart from the too-long reminders.
+                alert(CHANNEL_CLEARED, NOTIF_CLEARED, "${ev.posture.name.lowercase().replaceFirstChar { it.uppercase() }} load back to zero", "Fully recovered", timeoutMs = 60_000)
                 refreshNotification()
             }
         }
@@ -493,7 +494,7 @@ class PostureService : Service(), SensorEventListener {
         .put("sitLoadMs", detector.loads.load(Posture.SITTING)).put("standLoadMs", detector.loads.load(Posture.STANDING))
         .put("sitLimitMin", settings.limitMin(Posture.SITTING)).put("standLimitMin", settings.limitMin(Posture.STANDING))
 
-    private fun alert(channel: String, id: Int, title: String, text: String) {
+    private fun alert(channel: String, id: Int, title: String, text: String, timeoutMs: Long = 0) {
         val n = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_posture)
             .setContentTitle(title)
@@ -501,6 +502,7 @@ class PostureService : Service(), SensorEventListener {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openApp())
             .setAutoCancel(true)
+            .apply { if (timeoutMs > 0) setTimeoutAfter(timeoutMs) }
             .build()
         getSystemService(NotificationManager::class.java).notify(id, n)
     }
@@ -580,6 +582,8 @@ class PostureService : Service(), SensorEventListener {
         private const val NOTIF_ALERT = 2
         private const val NOTIF_CHANGE = 3
         private const val NOTIF_PHONE_USE = 4
+        private const val NOTIF_CLEARED = 5
+        private const val CHANNEL_CLEARED = "cleared"
         private const val PHONE_USE_GAP_MS = 2 * 60_000L
 
         private val _history = MutableStateFlow<List<HistPoint>>(emptyList())
@@ -601,6 +605,12 @@ class PostureService : Service(), SensorEventListener {
             val nm = ctx.getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel(CHANNEL_STATUS, "Status", NotificationManager.IMPORTANCE_LOW))
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS, "Too long reminders", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_CLEARED, "Load back to zero", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 60, 90, 60, 90, 60) // three quick taps
+                },
+            )
             nm.createNotificationChannel(NotificationChannel(CHANNEL_CHANGES, "Posture changes", NotificationManager.IMPORTANCE_DEFAULT))
         }
     }
