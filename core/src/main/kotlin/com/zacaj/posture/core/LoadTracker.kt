@@ -55,6 +55,15 @@ class LoadTracker(private val config: DetectorConfig) {
         return (otherLimit * (config.drainRates[p to other] ?: 1f)).toLong()
     }
 
+    /** Overwrite loads as of [tMs] (e.g. after recomputing history for a relabel). */
+    fun seed(tMs: Long, sitMs: Long, standMs: Long) {
+        loadMs[Posture.SITTING] = sitMs
+        loadMs[Posture.STANDING] = standMs
+        peak[Posture.SITTING] = maxOf(peak[Posture.SITTING] ?: 0, sitMs)
+        peak[Posture.STANDING] = maxOf(peak[Posture.STANDING] ?: 0, standMs)
+        lastT = tMs
+    }
+
     fun restore(other: LoadTracker) {
         loadMs.putAll(other.loadMs)
         peak.putAll(other.peak)

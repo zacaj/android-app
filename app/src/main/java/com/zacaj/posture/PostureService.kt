@@ -23,6 +23,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zacaj.posture.core.CalibrationSample
 import com.zacaj.posture.core.DetectorEvent
+import com.zacaj.posture.core.LoadTracker
 import com.zacaj.posture.core.Posture
 import com.zacaj.posture.core.Segment
 import com.zacaj.posture.core.SegmentLog
@@ -291,6 +292,35 @@ class PostureService : Service(), SensorEventListener {
         _history.value = (_history.value + p).dropWhile { it.t < t - HIST_KEEP_MS }
     }
 
+    /**
+     * Rewrite [start, end) of the chart history as [p] and replay the loads from there forward, so a
+     * relabel moves the load numbers too. Sample spacing (30s) bounds the precision.
+     */
+    private fun recomputeLoads(start: Long, end: Long, p: Posture) {
+        val h = _history.value.toMutableList()
+        if (h.isEmpty()) return
+        fun boundary(t: Long) {
+            if (t > h.last().t) return // ongoing stretch: everything from start on is relabeled
+            val i = h.indexOfLast { it.t <= t }
+            if (i >= 0 && h[i].t != t) h.add(i + 1, h[i].copy(t = t))
+        }
+        boundary(start); boundary(end)
+        for (i in h.indices) if (h[i].t in start until end && h[i].inPocket) h[i] = h[i].copy(state = p)
+        val b = (h.indexOfFirst { it.t >= start } - 1).coerceAtLeast(0)
+        val lt = LoadTracker(detector.config).apply { seed(h[b].t, h[b].sitLoadMs, h[b].standLoadMs) }
+        for (j in b + 1 until h.size) {
+            val prev = h[j - 1]
+            lt.update(h[j].t, prev.state, prev.inPocket)
+            h[j] = h[j].copy(sitLoadMs = lt.load(Posture.SITTING), standLoadMs = lt.load(Posture.STANDING))
+        }
+        _history.value = h
+        // Carry the corrected loads into the live tracker; it continues from the last sample.
+        val last = h.last()
+        detector.loads.seed(last.t, last.sitLoadMs, last.standLoadMs)
+        _status.value = _status.value.copy(sitLoadMs = last.sitLoadMs, standLoadMs = last.standLoadMs)
+        refreshNotification()
+    }
+
     private val segLog = SegmentLog()
 
     private fun publishSegments() {
@@ -305,6 +335,7 @@ class PostureService : Service(), SensorEventListener {
         val now = System.currentTimeMillis()
         segLog.relabel(start, p)
         publishSegments()
+        recomputeLoads(seg.start, end, p)
         recorder?.apply {
             write(TraceEvent.Note(now, "relabel ${seg.detected} -> $p for ${seg.start}..${end}"))
             write(TraceEvent.Label(seg.start, p))
@@ -330,6 +361,7 @@ class PostureService : Service(), SensorEventListener {
         val (start, end) = detector.correct(now, p)
         segLog.correctCurrent(start, p)
         publishSegments()
+        recomputeLoads(start, end, p)
         recorder?.apply {
             write(TraceEvent.Note(now, "correction $was -> $p for $start..$end"))
             write(TraceEvent.Label(start, p))
