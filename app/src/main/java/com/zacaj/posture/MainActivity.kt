@@ -45,7 +45,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import com.zacaj.posture.core.Posture
+import com.zacaj.posture.core.OrientationMatch
 import com.zacaj.posture.core.Segment
+import com.zacaj.posture.core.conflictDeg
+import com.zacaj.posture.core.nearestDeg
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -112,6 +115,17 @@ class MainActivity : ComponentActivity() {
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
                 Text("load: sitting ${status.sitLoadMs / 60_000} min · standing ${status.standLoadMs / 60_000} min")
                 Text("tilt %.0f° · motion %.2f".format(status.tiltDeg, status.motionStd))
+                if (!status.nearestStandDeg.isNaN()) {
+                    val note = when (status.match) {
+                        OrientationMatch.AMBIGUOUS -> " — matches both"
+                        OrientationMatch.UNMATCHED -> " — matches neither"
+                        else -> ""
+                    }
+                    Text(
+                        "nearest calibration: stand %.0f° · sit %.0f°$note".format(status.nearestStandDeg, status.nearestSitDeg),
+                        color = if (note.isEmpty()) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(if (status.inPocket) "in pocket" else "out of pocket — detection paused")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -161,6 +175,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            CalibrationList(s)
             OutlinedButton({ PostureService.send(this@MainActivity, PostureService.ACTION_FLUSH) }) {
                 Text("Close trace & upload now")
             }
@@ -227,13 +242,41 @@ class MainActivity : ComponentActivity() {
                 Feedback.show(this@MainActivity, "Settings saved")
             }
         }) { Text("Save") }
-        OutlinedButton({
-            s.referenceAxis = null
-            s.sittingAxis = null
-            if (PostureService.status.value.running) PostureService.send(this, PostureService.ACTION_RELOAD)
-            Feedback.show(this, "Calibration reset to defaults")
-        }) {
-            Text("Reset calibration")
+    }
+
+    @Composable
+    private fun CalibrationList(s: Settings) {
+        val flow by Settings.calibrationsFlow.collectAsState()
+        val cals = flow ?: remember { s.calibrations }
+        val fmt = remember { SimpleDateFormat("MMM d HH:mm", Locale.US) }
+        Text("Calibrations (${cals.size})", style = MaterialTheme.typography.titleSmall)
+        if (cals.isEmpty()) Text("None — using default angles.", style = MaterialTheme.typography.bodySmall)
+        cals.forEachIndexed { i, c ->
+            val conflict = cals.conflictDeg(c, Settings.TOO_CLOSE_DEG)
+            val other = if (c.posture == Posture.SITTING) Posture.STANDING else Posture.SITTING
+            val otherDeg = cals.nearestDeg(c.gravity, other)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${c.posture.name.lowercase()} · ${if (c.tMs > 0) fmt.format(Date(c.tMs)) else "earlier"} · " +
+                        (if (otherDeg.isNaN()) "no ${other.name.lowercase()} yet" else "%.0f° from nearest ${other.name.lowercase()}".format(otherDeg)) +
+                        (if (conflict != null) " — too close" else ""),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (conflict != null) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
+                )
+                OutlinedButton(
+                    {
+                        if (PostureService.status.value.running) {
+                            PostureService.send(this@MainActivity, PostureService.ACTION_DELETE_CALIBRATION) {
+                                putExtra(PostureService.EXTRA_INDEX, i)
+                            }
+                        } else {
+                            s.calibrations = cals.filterIndexed { j, _ -> j != i }
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) { Text("✕") }
+            }
         }
     }
 
@@ -242,6 +285,17 @@ class MainActivity : ComponentActivity() {
         val fmt = remember { SimpleDateFormat("HH:mm", Locale.US) }
         val end = seg.end ?: System.currentTimeMillis()
         val mins = (end - seg.start) / 60_000
+        val flow by Settings.calibrationsFlow.collectAsState()
+        val cals = flow ?: remember { Settings(this).calibrations }
+        val g = seg.meanGravity
+        val orient = if (g == null) null else buildString {
+            val st = cals.nearestDeg(g, Posture.STANDING)
+            val si = cals.nearestDeg(g, Posture.SITTING)
+            if (!st.isNaN()) append("stand %.0f° · ".format(st))
+            if (!si.isNaN()) append("sit %.0f° · ".format(si))
+            append("±%.0f°".format(seg.spreadDeg))
+        }
+        Column {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 "${fmt.format(Date(seg.start))}–${seg.end?.let { fmt.format(Date(it)) } ?: "now"} " +
@@ -261,6 +315,10 @@ class MainActivity : ComponentActivity() {
                     enabled = p != seg.shown,
                 ) { Text(p.name.take(2).lowercase().replaceFirstChar { it.uppercase() }) }
             }
+        }
+        if (orient != null) {
+            Text(orient, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        }
         }
     }
 

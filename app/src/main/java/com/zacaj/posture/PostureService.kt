@@ -21,7 +21,11 @@ import android.util.Log
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.zacaj.posture.core.Calibration
 import com.zacaj.posture.core.CalibrationSample
+import com.zacaj.posture.core.OrientationMatch
+import com.zacaj.posture.core.conflictDeg
+import com.zacaj.posture.core.nearestDeg
 import com.zacaj.posture.core.DetectorEvent
 import com.zacaj.posture.core.LoadTracker
 import com.zacaj.posture.core.Posture
@@ -51,6 +55,9 @@ data class Status(
     val calibration: String? = null,
     val sitLoadMs: Long = 0,
     val standLoadMs: Long = 0,
+    val nearestStandDeg: Float = Float.NaN,
+    val nearestSitDeg: Float = Float.NaN,
+    val match: OrientationMatch = OrientationMatch.NONE,
     /** Recent detected stretches, newest last. */
     val segments: List<Segment> = emptyList(),
 )
@@ -124,6 +131,10 @@ class PostureService : Service(), SensorEventListener {
                 val target = intent.getStringExtra(EXTRA_LABEL)
                     ?.let { runCatching { Posture.valueOf(it) }.getOrNull() } ?: Posture.STANDING
                 handler.post { armCalibration(target) }
+            }
+            ACTION_DELETE_CALIBRATION -> {
+                val i = intent.getIntExtra(EXTRA_INDEX, -1)
+                handler.post { deleteCalibration(i) }
             }
             ACTION_CALIBRATE_CANCEL -> handler.post { cancelCalibration("Calibration cancelled") }
             ACTION_FLUSH -> handler.post {
@@ -232,8 +243,12 @@ class PostureService : Service(), SensorEventListener {
                         inPocket = d.inPocket,
                         sitLoadMs = d.loads.load(Posture.SITTING),
                         standLoadMs = d.loads.load(Posture.STANDING),
+                        nearestStandDeg = d.classifier.nearestStandDeg,
+                        nearestSitDeg = d.classifier.nearestSitDeg,
+                        match = d.classifier.match,
                     )
                     refreshNotification()
+                    trackOrientation(t)
                     checkPhoneUse(t)
                     recordHistory(t, force = false)
                 }
@@ -253,6 +268,28 @@ class PostureService : Service(), SensorEventListener {
                 }
             }
         }
+    }
+
+    private var lastSegPublish = 0L
+    private var calibNotified = false
+
+    /** Feed still readings into the history stretch and flag orientations the calibrations can't place. */
+    private fun trackOrientation(t: Long) {
+        val d = detector
+        val c = d.classifier
+        if (d.inPocket && c.magnitudeStd < 0.5f && c.gravity != Vec3.ZERO) {
+            segLog.onGravity(c.gravity)
+            if (t - lastSegPublish > 10_000) { lastSegPublish = t; publishSegments() }
+        }
+        val unsure = d.inPocket && d.state == Posture.UNKNOWN &&
+            (c.match == OrientationMatch.AMBIGUOUS || c.match == OrientationMatch.UNMATCHED)
+        if (!unsure || calibNotified) return
+        calibNotified = true
+        val why = if (c.match == OrientationMatch.AMBIGUOUS) "Matches both sitting and standing" else "Doesn't match any calibration"
+        alert(
+            CHANNEL_CALIB, NOTIF_CALIB, "Posture unknown — calibrate?",
+            "$why (stand %.0f°, sit %.0f°). Calibrate what you're doing now, or relabel it in History.".format(c.nearestStandDeg, c.nearestSitDeg),
+        )
     }
 
     private var phoneUseStart: Long? = null
@@ -335,6 +372,7 @@ class PostureService : Service(), SensorEventListener {
         val now = System.currentTimeMillis()
         segLog.relabel(start, p)
         publishSegments()
+        calibrateFromSegment(seg, p)
         recomputeLoads(seg.start, end, p)
         recorder?.apply {
             write(TraceEvent.Note(now, "relabel ${seg.detected} -> $p for ${seg.start}..${end}"))
@@ -358,9 +396,11 @@ class PostureService : Service(), SensorEventListener {
     private fun applyCorrection(p: Posture) {
         val now = System.currentTimeMillis()
         val was = detector.state
+        val curSeg = segLog.segments.lastOrNull()?.takeIf { it.end == null }
         val (start, end) = detector.correct(now, p)
         segLog.correctCurrent(start, p)
         publishSegments()
+        calibrateFromSegment(curSeg, p)
         recomputeLoads(start, end, p)
         recorder?.apply {
             write(TraceEvent.Note(now, "correction $was -> $p for $start..$end"))
@@ -458,16 +498,50 @@ class PostureService : Service(), SensorEventListener {
             Feedback.show(this, "Calibration failed: moved too much (motion %.2f), try again".format(sample.magnitudeStd), error = true)
             return
         }
-        when (target) {
-            Posture.SITTING -> settings.sittingAxis = g
-            else -> settings.referenceAxis = g
-        }
-        recorder?.write(TraceEvent.Note(now, "calibrated $target ${g.x} ${g.y} ${g.z}"))
         recorder?.write(TraceEvent.Label(now, target))
         Haptics.success(this)
         setCalibStatus(null)
-        Feedback.show(this, "Calibrated ${target.name.lowercase()}: (%.1f, %.1f, %.1f)".format(g.x, g.y, g.z))
+        addCalibration(Calibration(target, g, now), "Calibrated")
+    }
+
+    /** Save a calibration, warn if it sits too close to the other posture's, and apply it. */
+    private fun addCalibration(c: Calibration, what: String) {
+        val g = c.gravity
+        recorder?.write(TraceEvent.Note(c.tMs, "calibrated ${c.posture} ${g.x} ${g.y} ${g.z}"))
+        val all = settings.calibrations + c
+        settings.calibrations = all
+        val n = all.count { it.posture == c.posture }
+        val conflict = all.conflictDeg(c, Settings.TOO_CLOSE_DEG)
+        if (conflict != null) {
+            val other = if (c.posture == Posture.SITTING) "standing" else "sitting"
+            Feedback.show(
+                this,
+                "$what ${c.posture.name.lowercase()} #$n, but it's only %.0f° from a $other calibration — those will read as unknown. Remove one in Setup if it's wrong.".format(conflict),
+                error = true,
+            )
+        } else {
+            Feedback.show(this, "$what ${c.posture.name.lowercase()} #$n")
+        }
         reloadConfig()
+    }
+
+    private fun deleteCalibration(index: Int) {
+        val all = settings.calibrations
+        if (index !in all.indices) return
+        settings.calibrations = all.filterIndexed { i, _ -> i != index }
+        Feedback.show(this, "Removed ${all[index].posture.name.lowercase()} calibration")
+        reloadConfig()
+    }
+
+    /** A relabeled stretch that held one orientation is a free calibration. */
+    private fun calibrateFromSegment(seg: Segment?, p: Posture) {
+        if (seg == null || (p != Posture.SITTING && p != Posture.STANDING)) return
+        val g = seg.meanGravity ?: return
+        if (seg.gN < MIN_SEG_SAMPLES || seg.spreadDeg > MAX_SEG_SPREAD_DEG) return
+        // Skip near-duplicates of an existing same-posture calibration.
+        val near = settings.calibrations.nearestDeg(g, p)
+        if (!near.isNaN() && near < 5f) return
+        addCalibration(Calibration(p, g * 9.81f, System.currentTimeMillis()), "Saved relabeled stretch as")
     }
 
     private fun cancelCalibration(msg: String?) {
@@ -487,7 +561,7 @@ class PostureService : Service(), SensorEventListener {
     private fun handle(ev: DetectorEvent) {
         Log.i(TAG, "event $ev")
         segLog.onEvent(ev)
-        if (ev is DetectorEvent.StateChanged || ev is DetectorEvent.PocketChanged) {
+        if (ev is DetectorEvent.StateChanged || ev is DetectorEvent.PocketChanged || ev is DetectorEvent.Shifted) {
             publishSegments()
             recordHistory(ev.tMs, force = true)
         }
@@ -498,6 +572,10 @@ class PostureService : Service(), SensorEventListener {
                 json.put("type", "state").put("from", ev.from.name).put("to", ev.to.name).put("since", ev.since)
                 // The too-long reminder is moot once the state changes.
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_ALERT)
+                if (ev.to != Posture.UNKNOWN) {
+                    calibNotified = false
+                    getSystemService(NotificationManager::class.java).cancel(NOTIF_CALIB)
+                }
                 refreshNotification()
                 if (settings.notifyOnChange && ev.from != Posture.UNKNOWN) {
                     alert(CHANNEL_CHANGES, NOTIF_CHANGE, "Now ${ev.to.name.lowercase()}", "was ${ev.from.name.lowercase()}")
@@ -511,6 +589,9 @@ class PostureService : Service(), SensorEventListener {
             is DetectorEvent.TooLong -> {
                 json.put("type", "too_long").put("state", ev.state.name).put("durationMs", ev.durationMs)
                 alert(CHANNEL_ALERTS, NOTIF_ALERT, "${ev.state.name.lowercase().replaceFirstChar { it.uppercase() }} load ${ev.durationMs / 60_000} min", "Time to change it up")
+            }
+            is DetectorEvent.Shifted -> {
+                json.put("type", "shift").put("state", detector.state.name).put("since", ev.since).put("angleDeg", ev.angleDeg)
             }
             is DetectorEvent.LoadCleared -> {
                 json.put("type", "load_cleared").put("posture", ev.posture.name)
@@ -605,6 +686,13 @@ class PostureService : Service(), SensorEventListener {
         const val ACTION_CALIBRATE = "com.zacaj.posture.CALIBRATE"
         const val ACTION_FLUSH = "com.zacaj.posture.FLUSH"
         const val ACTION_CALIBRATE_CANCEL = "com.zacaj.posture.CALIBRATE_CANCEL"
+        const val ACTION_DELETE_CALIBRATION = "com.zacaj.posture.DELETE_CALIBRATION"
+        const val EXTRA_INDEX = "index"
+        private const val CHANNEL_CALIB = "calibration"
+        private const val NOTIF_CALIB = 6
+        /** A relabeled stretch becomes a calibration if it had this many still readings within this spread. */
+        private const val MIN_SEG_SAMPLES = 20
+        private const val MAX_SEG_SPREAD_DEG = 8f
         const val EXTRA_LABEL = "label"
         private const val CHANNEL_STATUS = "status"
         /** Too-long reminders (id kept from when it also carried state changes, so user settings survive). */
@@ -643,6 +731,7 @@ class PostureService : Service(), SensorEventListener {
                     vibrationPattern = longArrayOf(0, 60, 90, 60, 90, 60) // three quick taps
                 },
             )
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_CALIB, "Calibration needed", NotificationManager.IMPORTANCE_DEFAULT))
             nm.createNotificationChannel(NotificationChannel(CHANNEL_CHANGES, "Posture changes", NotificationManager.IMPORTANCE_DEFAULT))
         }
     }

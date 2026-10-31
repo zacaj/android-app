@@ -57,6 +57,8 @@ class PostureStateMachine(private val config: DetectorConfig) {
 
 }
 
+private const val STILL_STD = 0.5f
+
 /** Classifier + state machine. Not thread-safe; feed from one thread. */
 class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
     val classifier = PostureClassifier(config)
@@ -105,6 +107,7 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         this.inPocket = inPocket
         if (inPocket) lastPocketInAt = tMs else lastPocketOutAt = tMs
         classifier.reset()
+        resetAnchor()
         stateMachine.clearCandidate()
         lastRaw = null
         return listOf(DetectorEvent.PocketChanged(tMs, inPocket))
@@ -144,7 +147,44 @@ class PostureDetector(val config: DetectorConfig = DetectorConfig()) {
         if (pocketEvents.isNotEmpty()) return pocketEvents
         if (!inPocket) return loads.update(tMs, state, active = false)
         lastRaw = classifier.add(tMs, accel)
-        return stateMachine.onRaw(tMs, lastRaw) + loads.update(tMs, state, active = true)
+        val changes = stateMachine.onRaw(tMs, lastRaw)
+        if (changes.isNotEmpty()) resetAnchor()
+        return changes + checkShift(tMs) + loads.update(tMs, state, active = true)
+    }
+
+    // Orientation drift tracking for [DetectorEvent.Shifted]: the settled direction of the current
+    // stretch, and since when a different one has held.
+    private var anchor: Vec3? = null
+    private var driftSince: Long? = null
+    private var driftDir: Vec3? = null
+
+    private fun resetAnchor() {
+        anchor = null
+        driftSince = null
+        driftDir = null
+    }
+
+    private fun checkShift(tMs: Long): List<DetectorEvent> {
+        val c = classifier
+        if (c.gravity == Vec3.ZERO || c.magnitudeStd > STILL_STD || state == Posture.WALKING) return emptyList()
+        val a = anchor ?: run { anchor = c.gravity; return emptyList() }
+        val off = axisAngleDeg(c.gravity, a)
+        if (off < config.shiftDeg) {
+            driftSince = null
+            return emptyList()
+        }
+        val d = driftDir
+        // The new orientation itself must be steady, or it's just fidgeting.
+        if (driftSince == null || d == null || axisAngleDeg(c.gravity, d) > config.shiftDeg / 2) {
+            driftSince = tMs
+            driftDir = c.gravity
+            return emptyList()
+        }
+        if (tMs - driftSince!! < config.shiftHoldMs) return emptyList()
+        val since = driftSince!!
+        anchor = c.gravity
+        driftSince = null
+        return listOf(DetectorEvent.Shifted(tMs, since, off))
     }
 
     /** Gyro feeds the walking check (thigh rotation). */

@@ -9,6 +9,12 @@ data class Vec3(val x: Float, val y: Float, val z: Float) {
     fun dot(o: Vec3): Float = x * o.x + y * o.y + z * o.z
     operator fun plus(o: Vec3) = Vec3(x + o.x, y + o.y, z + o.z)
     operator fun times(s: Float) = Vec3(x * s, y * s, z * s)
+    /** Unit vector with the sign flipped to agree with [ref] (axes are sign-agnostic). */
+    fun unitToward(ref: Vec3?): Vec3 {
+        val n = norm().takeIf { it > 0f } ?: return ZERO
+        val u = this * (1f / n)
+        return if (ref != null && u.dot(ref) < 0f) u * -1f else u
+    }
 
     companion object {
         val ZERO = Vec3(0f, 0f, 0f)
@@ -31,6 +37,37 @@ sealed interface DetectorEvent {
 
     /** Debounced pocket change; detection is paused while [inPocket] is false. */
     data class PocketChanged(override val tMs: Long, val inPocket: Boolean) : DetectorEvent
+
+    /**
+     * Same state, but the phone settled into a clearly different orientation at [since] (repositioned,
+     * or maybe a posture change the calibrations can't tell apart). Splits the history.
+     */
+    data class Shifted(override val tMs: Long, val since: Long, val angleDeg: Float) : DetectorEvent
+}
+
+/** A calibrated phone-frame gravity for a posture. */
+data class Calibration(val posture: Posture, val gravity: Vec3, val tMs: Long)
+
+/** Angle from [g] to the nearest [p] calibration, NaN if none. */
+fun List<Calibration>.nearestDeg(g: Vec3, p: Posture): Float =
+    filter { it.posture == p }.minOfOrNull { axisAngleDeg(g, it.gravity) } ?: Float.NaN
+
+/** The opposite posture's nearest calibration angle, if within [tooCloseDeg] of [c]. */
+fun List<Calibration>.conflictDeg(c: Calibration, tooCloseDeg: Float): Float? {
+    val other = if (c.posture == Posture.SITTING) Posture.STANDING else Posture.SITTING
+    return nearestDeg(c.gravity, other).takeIf { !it.isNaN() && it < tooCloseDeg }
+}
+
+/** How the current orientation compares with the calibrations. */
+enum class OrientationMatch {
+    /** Clearly nearer one posture's calibrations. */
+    OK,
+    /** Standing and sitting calibrations are about equally close. */
+    AMBIGUOUS,
+    /** Nothing calibrated is close. */
+    UNMATCHED,
+    /** Uncalibrated (fixed angles) or no reading yet. */
+    NONE,
 }
 
 /** Sign-agnostic angle in degrees between two vectors; NaN if either is zero. */
@@ -87,6 +124,18 @@ data class DetectorConfig(
      */
     val sittingAxis: Vec3? = null,
     val referenceMarginDeg: Float = 10f,
+    /**
+     * Calibrated orientations (several per posture allowed). With at least one sitting entry (or
+     * [sittingAxis]), classification picks the posture with the nearest entry; [referenceAxis] stands
+     * in for standing if none are calibrated.
+     */
+    val calibrations: List<Calibration> = emptyList(),
+    /** Further than this from every calibration = unknown orientation. */
+    val maxMatchDeg: Float = 30f,
+    /** Gravity settling this far from the stretch's usual orientation splits the history... */
+    val shiftDeg: Float = 15f,
+    /** ...once it has held that long. */
+    val shiftHoldMs: Long = 10_000,
     /** Proximity "uncovered" must last this long to count as out of pocket (it flickers in pockets). */
     val pocketOutDebounceMs: Long = 1500,
     /** How long a new raw classification must persist before the state changes. */
@@ -95,6 +144,8 @@ data class DetectorConfig(
         Posture.STANDING to 4000,
         // Long enough that a few steps or shuffling in place don't count as a walk.
         Posture.WALKING to 15_000,
+        // Orientation that matches no / both calibrations; long enough to ride out a reposition.
+        Posture.UNKNOWN to 20_000,
     ),
     /**
      * Gait readings dip between windows (turns, pauses at a door); a pending WALKING candidate

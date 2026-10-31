@@ -134,6 +134,49 @@ class CalibrationTest {
     }
 
     @Test
+    fun `multiple calibrations per posture, in-between orientations are unknown`() {
+        val upright = Vec3(0f, 9.8f, 0f)
+        val sideways = Vec3(7.8f, -5.9f, 0f)
+        val sit = Vec3(8.8f, 1.8f, -3.9f)
+        val gen = SyntheticTrace(seed = 11)
+        gen.standingGravity = sideways
+        gen.sittingGravity = sit
+        val trace = gen.segment(Posture.SITTING, 30_000).segment(Posture.STANDING, 40_000).events
+        fun states(cals: List<Calibration>) = Replay.run(trace, DetectorConfig(calibrations = cals))
+            .events.filterIsInstance<DetectorEvent.StateChanged>().map { it.to }
+        val one = listOf(Calibration(Posture.STANDING, upright, 0), Calibration(Posture.SITTING, sit, 0))
+        // Sideways standing is far from both calibrations: unknown, not "still sitting".
+        assertEquals(listOf(Posture.SITTING, Posture.UNKNOWN), states(one))
+        assertEquals(listOf(Posture.SITTING, Posture.STANDING), states(one + Calibration(Posture.STANDING, sideways, 0)))
+    }
+
+    @Test
+    fun `conflicting calibrations are flagged`() {
+        val cals = listOf(
+            Calibration(Posture.STANDING, Vec3(0f, 9.8f, 0f), 0),
+            Calibration(Posture.SITTING, Vec3(0f, 9.0f, 2.5f), 0),
+            Calibration(Posture.SITTING, Vec3(0f, 5f, 8f), 0),
+        )
+        assertTrue(cals.conflictDeg(cals[1], 20f) != null)
+        assertTrue(cals.conflictDeg(cals[2], 20f) == null)
+    }
+
+    @Test
+    fun `settling into a new orientation splits the stretch`() {
+        val gen = SyntheticTrace(seed = 12)
+        gen.standingGravity = Vec3(0f, 9.8f, 0f)
+        gen.segment(Posture.STANDING, 30_000)
+        gen.standingGravity = Vec3(3.4f, 9.2f, 0f) // ~20° off, still standing by angle
+        gen.segment(Posture.STANDING, 30_000, label = false)
+        val evs = Replay.run(gen.events).events
+        assertEquals(1, evs.filterIsInstance<DetectorEvent.StateChanged>().size)
+        assertEquals(1, evs.filterIsInstance<DetectorEvent.Shifted>().size)
+        val log = SegmentLog()
+        evs.forEach(log::onEvent)
+        assertEquals(2, log.segments.size)
+    }
+
+    @Test
     fun `calibration sample rejects movement`() {
         val still = SyntheticTrace(seed = 9).segment(Posture.STANDING, 5_000).events
             .filterIsInstance<TraceEvent.Accel>().map { it.v }

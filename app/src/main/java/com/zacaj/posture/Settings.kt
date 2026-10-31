@@ -3,7 +3,9 @@ package com.zacaj.posture
 import android.content.Context
 import android.os.Build
 import androidx.core.content.edit
+import com.zacaj.posture.core.Calibration
 import com.zacaj.posture.core.DetectorConfig
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.zacaj.posture.core.Posture
 import com.zacaj.posture.core.Vec3
 
@@ -84,17 +86,49 @@ class Settings(context: Context) {
             else { putFloat("sitX", v.x); putFloat("sitY", v.y); putFloat("sitZ", v.z) }
         }
 
+    /**
+     * All calibrated orientations, oldest first. Stored as "POSTURE:t:x,y,z;…"; first read migrates
+     * the old single standing/sitting axes.
+     */
+    var calibrations: List<Calibration>
+        get() {
+            val raw = p.getString("calibrations", null)
+                ?: return listOfNotNull(
+                    referenceAxis?.let { Calibration(Posture.STANDING, it, 0) },
+                    sittingAxis?.let { Calibration(Posture.SITTING, it, 0) },
+                )
+            return raw.split(';').filter { it.isNotBlank() }.mapNotNull { e ->
+                runCatching {
+                    val (ps, ts, vs) = e.split(':')
+                    val (x, y, z) = vs.split(',').map { it.toFloat() }
+                    Calibration(Posture.valueOf(ps), Vec3(x, y, z), ts.toLong())
+                }.getOrNull()
+            }
+        }
+        set(v) {
+            p.edit {
+                putString("calibrations", v.joinToString(";") { "${it.posture}:${it.tMs}:${it.gravity.x},${it.gravity.y},${it.gravity.z}" })
+            }
+            calibrationsFlow.value = v
+        }
+
     val deviceName: String get() = Build.MODEL.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     fun detectorConfig(): DetectorConfig {
         val base = DetectorConfig()
         return base.copy(
-            referenceAxis = referenceAxis ?: base.referenceAxis,
-            sittingAxis = sittingAxis,
+            calibrations = calibrations,
             tooLongMs = Posture.entries.mapNotNull { s ->
                 limitMin(s).takeIf { it > 0 }?.let { s to it * 60_000L }
             }.toMap(),
             tooLongRepeatMs = repeatMin.coerceAtLeast(1) * 60_000L,
         )
+    }
+
+    companion object {
+        /** Latest calibrations for the UI; null until first written this process. */
+        val calibrationsFlow = MutableStateFlow<List<Calibration>?>(null)
+        /** Opposite-posture calibrations closer than this get flagged. */
+        const val TOO_CLOSE_DEG = 20f
     }
 }

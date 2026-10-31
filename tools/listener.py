@@ -32,6 +32,8 @@ def describe(ev):
     elif t == "correction":
         what = (f"correction {ev['from'].lower()} -> {ev['to'].lower()} "
                 f"{hm(ev['start'])}-{hm(ev['end'])} ({mins(ev['end'] - ev['start'])})")
+    elif t == "shift":
+        what = f"orientation shift ({ev['angleDeg']:.0f}°) while {ev['state'].lower()}, since {hm(ev['since'])}"
     elif t == "heartbeat":
         state = ev["state"].lower() if ev.get("inPocket", True) else "out of pocket"
         what = f"heartbeat v{ev.get('version', '?')}: {state} for {mins(ev['t'] - ev['since'])}"
