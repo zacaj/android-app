@@ -58,6 +58,50 @@ fun List<Calibration>.conflictDeg(c: Calibration, tooCloseDeg: Float): Float? {
     return nearestDeg(c.gravity, other).takeIf { !it.isNaN() && it < tooCloseDeg }
 }
 
+/** "standing #2": 1-based position among that posture's calibrations in [this] list. */
+fun List<Calibration>.calName(index: Int): String {
+    val c = getOrNull(index) ?: return "default upright"
+    val n = take(index + 1).count { it.posture == c.posture }
+    return "${c.posture.name.lowercase()} #$n"
+}
+
+/**
+ * One orientation reading against the calibrations. Indices point into
+ * [DetectorConfig.calibrations]; -1 = the default upright axis (no standing calibrations) / none.
+ */
+data class OrientationReading(
+    val tMs: Long,
+    val gravity: Vec3,
+    /** Angle from the phone's long axis: 0° = upright (top or bottom down), 90° = long edge level. */
+    val tiltDeg: Float,
+    val standIdx: Int,
+    val standDeg: Float,
+    val sitIdx: Int,
+    val sitDeg: Float,
+    val match: OrientationMatch,
+) {
+    companion object {
+        fun of(config: DetectorConfig, g: Vec3, tMs: Long): OrientationReading {
+            val cals = config.calibrations
+            fun nearest(p: Posture): Pair<Int, Float> =
+                cals.withIndex().filter { it.value.posture == p }
+                    .map { it.index to axisAngleDeg(g, it.value.gravity) }
+                    .minByOrNull { it.second } ?: (-1 to Float.NaN)
+            var (si, sd) = nearest(Posture.STANDING)
+            if (sd.isNaN()) sd = axisAngleDeg(g, config.referenceAxis)
+            var (ti, td) = nearest(Posture.SITTING)
+            if (td.isNaN()) config.sittingAxis?.let { td = axisAngleDeg(g, it) }
+            val match = when {
+                td.isNaN() || sd.isNaN() -> OrientationMatch.NONE
+                minOf(sd, td) > config.maxMatchDeg -> OrientationMatch.UNMATCHED
+                kotlin.math.abs(sd - td) < config.referenceMarginDeg -> OrientationMatch.AMBIGUOUS
+                else -> OrientationMatch.OK
+            }
+            return OrientationReading(tMs, g, axisAngleDeg(g, Vec3.Y), si, sd, ti, td, match)
+        }
+    }
+}
+
 /** How the current orientation compares with the calibrations. */
 enum class OrientationMatch {
     /** Clearly nearer one posture's calibrations. */

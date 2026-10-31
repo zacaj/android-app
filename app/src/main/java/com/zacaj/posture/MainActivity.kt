@@ -45,7 +45,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import com.zacaj.posture.core.Posture
+import com.zacaj.posture.core.Calibration
 import com.zacaj.posture.core.OrientationMatch
+import com.zacaj.posture.core.OrientationReading
+import com.zacaj.posture.core.Vec3
+import com.zacaj.posture.core.axisAngleDeg
+import com.zacaj.posture.core.calName
 import com.zacaj.posture.core.Segment
 import com.zacaj.posture.core.conflictDeg
 import com.zacaj.posture.core.nearestDeg
@@ -114,18 +119,19 @@ class MainActivity : ComponentActivity() {
                 val mins = if (status.since > 0) (System.currentTimeMillis() - status.since) / 60_000 else 0
                 Text("for $mins min · raw ${status.raw?.name?.lowercase() ?: "-"}")
                 Text("load: sitting ${status.sitLoadMs / 60_000} min · standing ${status.standLoadMs / 60_000} min")
-                Text("tilt %.0f° · motion %.2f".format(status.tiltDeg, status.motionStd))
-                if (!status.nearestStandDeg.isNaN()) {
-                    val note = when (status.match) {
-                        OrientationMatch.AMBIGUOUS -> " — matches both"
-                        OrientationMatch.UNMATCHED -> " — matches neither"
-                        else -> ""
-                    }
-                    Text(
-                        "nearest calibration: stand %.0f° · sit %.0f°$note".format(status.nearestStandDeg, status.nearestSitDeg),
-                        color = if (note.isEmpty()) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.error,
-                    )
+                Text("motion %.2f".format(status.motionStd))
+                val flow by Settings.calibrationsFlow.collectAsState()
+                val cals = flow ?: remember { s.calibrations }
+                status.pocketReading?.let { r ->
+                    val ago = (System.currentTimeMillis() - r.tMs) / 1000
+                    val agoText = if (ago < 3) "now" else if (ago < 120) "${ago}s ago" else "${ago / 60} min ago"
+                    ReadingText("Last in-pocket reading ($agoText)", r, cals)
                 }
+                status.liveReading?.let { ReadingText("Live", it, cals) }
+                Text(
+                    "Tilt: 0° = phone upright (top/bottom down, like a front pocket standing), 90° = long edge level.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                )
                 Text(if (status.inPocket) "in pocket" else "out of pocket — detection paused")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -245,6 +251,21 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun ReadingText(label: String, r: OrientationReading, cals: List<Calibration>) {
+        val note = when (r.match) {
+            OrientationMatch.AMBIGUOUS -> " — matches both"
+            OrientationMatch.UNMATCHED -> " — matches neither"
+            else -> ""
+        }
+        val nearest = if (r.sitDeg.isNaN()) "" else
+            " · %s %.0f° · %s %.0f°".format(cals.calName(r.standIdx), r.standDeg, cals.calName(r.sitIdx), r.sitDeg)
+        Text(
+            "$label: tilt %.0f°$nearest$note".format(r.tiltDeg),
+            color = if (note.isEmpty()) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+    }
+
+    @Composable
     private fun CalibrationList(s: Settings) {
         val flow by Settings.calibrationsFlow.collectAsState()
         val cals = flow ?: remember { s.calibrations }
@@ -254,11 +275,15 @@ class MainActivity : ComponentActivity() {
         cals.forEachIndexed { i, c ->
             val conflict = cals.conflictDeg(c, Settings.TOO_CLOSE_DEG)
             val other = if (c.posture == Posture.SITTING) Posture.STANDING else Posture.SITTING
+            val otherIdx = cals.withIndex().filter { it.value.posture == other }
+                .minByOrNull { axisAngleDeg(c.gravity, it.value.gravity) }?.index ?: -1
             val otherDeg = cals.nearestDeg(c.gravity, other)
+            val u = c.gravity.unitToward(null)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "${c.posture.name.lowercase()} · ${if (c.tMs > 0) fmt.format(Date(c.tMs)) else "earlier"} · " +
-                        (if (otherDeg.isNaN()) "no ${other.name.lowercase()} yet" else "%.0f° from nearest ${other.name.lowercase()}".format(otherDeg)) +
+                    "${cals.calName(i)} · ${if (c.tMs > 0) fmt.format(Date(c.tMs)) else "earlier"} · " +
+                        "tilt %.0f° (%.2f, %.2f, %.2f)\n".format(axisAngleDeg(c.gravity, Vec3.Y), u.x, u.y, u.z) +
+                        (if (otherDeg.isNaN()) "no ${other.name.lowercase()} yet" else "%.0f° from ${cals.calName(otherIdx)}".format(otherDeg)) +
                         (if (conflict != null) " — too close" else ""),
                     Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,

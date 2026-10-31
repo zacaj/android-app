@@ -24,6 +24,8 @@ import androidx.core.app.ServiceCompat
 import com.zacaj.posture.core.Calibration
 import com.zacaj.posture.core.CalibrationSample
 import com.zacaj.posture.core.OrientationMatch
+import com.zacaj.posture.core.OrientationReading
+import com.zacaj.posture.core.calName
 import com.zacaj.posture.core.conflictDeg
 import com.zacaj.posture.core.nearestDeg
 import com.zacaj.posture.core.DetectorEvent
@@ -55,9 +57,10 @@ data class Status(
     val calibration: String? = null,
     val sitLoadMs: Long = 0,
     val standLoadMs: Long = 0,
-    val nearestStandDeg: Float = Float.NaN,
-    val nearestSitDeg: Float = Float.NaN,
-    val match: OrientationMatch = OrientationMatch.NONE,
+    /** Last still, in-pocket reading: what classification actually saw before the phone came out. */
+    val pocketReading: OrientationReading? = null,
+    /** Current orientation regardless of pocket/motion, for checking by hand. */
+    val liveReading: OrientationReading? = null,
     /** Recent detected stretches, newest last. */
     val segments: List<Segment> = emptyList(),
 )
@@ -230,8 +233,14 @@ class PostureService : Service(), SensorEventListener {
             Sensor.TYPE_ACCELEROMETER -> {
                 recorder?.write(TraceEvent.Accel(t, v))
                 calibSamples?.add(v)
+                liveGravity = if (liveGravity == Vec3.ZERO) v else liveGravity * 0.9f + v * 0.1f
                 val d = detector
                 d.onAccel(t, v).forEach(::handle)
+                // Only still moments with the proximity sensor covered: excludes the lift out of the pocket.
+                val c = d.classifier
+                if (d.inPocket && proximityNear && c.magnitudeStd < 0.5f && c.gravity != Vec3.ZERO) {
+                    pocketReading = OrientationReading.of(d.config, c.gravity, t)
+                }
                 if (t - lastStatusAt > 500) {
                     lastStatusAt = t
                     _status.value = _status.value.copy(
@@ -243,9 +252,8 @@ class PostureService : Service(), SensorEventListener {
                         inPocket = d.inPocket,
                         sitLoadMs = d.loads.load(Posture.SITTING),
                         standLoadMs = d.loads.load(Posture.STANDING),
-                        nearestStandDeg = d.classifier.nearestStandDeg,
-                        nearestSitDeg = d.classifier.nearestSitDeg,
-                        match = d.classifier.match,
+                        pocketReading = pocketReading,
+                        liveReading = OrientationReading.of(d.config, liveGravity, t),
                     )
                     refreshNotification()
                     trackOrientation(t)
@@ -270,6 +278,8 @@ class PostureService : Service(), SensorEventListener {
         }
     }
 
+    private var liveGravity = Vec3.ZERO
+    private var pocketReading: OrientationReading? = null
     private var lastSegPublish = 0L
     private var calibNotified = false
 
@@ -285,10 +295,13 @@ class PostureService : Service(), SensorEventListener {
             (c.match == OrientationMatch.AMBIGUOUS || c.match == OrientationMatch.UNMATCHED)
         if (!unsure || calibNotified) return
         calibNotified = true
+        val r = c.reading ?: return
+        val cals = d.config.calibrations
         val why = if (c.match == OrientationMatch.AMBIGUOUS) "Matches both sitting and standing" else "Doesn't match any calibration"
         alert(
             CHANNEL_CALIB, NOTIF_CALIB, "Posture unknown — calibrate?",
-            "$why (stand %.0f°, sit %.0f°). Calibrate what you're doing now, or relabel it in History.".format(c.nearestStandDeg, c.nearestSitDeg),
+            "$why (tilt %.0f°; %s %.0f°, %s %.0f°). Calibrate what you're doing now, or relabel it in History."
+                .format(r.tiltDeg, cals.calName(r.standIdx), r.standDeg, cals.calName(r.sitIdx), r.sitDeg),
         )
     }
 

@@ -23,18 +23,12 @@ class PostureClassifier(private val config: DetectorConfig) {
     /** Mean |gyro| (rad/s) over the window; NaN if no gyro data. */
     var gyroMean: Float = Float.NaN
         private set
-    /** Nearest standing / sitting calibration angles (NaN when uncalibrated). */
-    var nearestStandDeg: Float = Float.NaN
+    /** Latest window's orientation vs the calibrations. */
+    var reading: OrientationReading? = null
         private set
-    var nearestSitDeg: Float = Float.NaN
-        private set
-    var match: OrientationMatch = OrientationMatch.NONE
-        private set
+    val match get() = reading?.match ?: OrientationMatch.NONE
 
-    private val sitAxes = config.calibrations.filter { it.posture == Posture.SITTING }.map { it.gravity } +
-        listOfNotNull(config.sittingAxis)
-    private val standAxes = config.calibrations.filter { it.posture == Posture.STANDING }.map { it.gravity }
-        .ifEmpty { listOf(config.referenceAxis) }
+    private val calibrated = config.sittingAxis != null || config.calibrations.any { it.posture == Posture.SITTING }
 
     /** Orientation-only classification (ignores motion). */
     var orientation: Posture? = null
@@ -85,24 +79,14 @@ class PostureClassifier(private val config: DetectorConfig) {
             .takeIf { it.size >= 5 }?.average()?.toFloat() ?: Float.NaN
 
         tiltDeg = axisAngleDeg(gravity, config.referenceAxis)
-        match = OrientationMatch.NONE
+        val r = OrientationReading.of(config, gravity, tMs).takeIf { calibrated }
+        reading = r
         orientation = when {
             tiltDeg.isNaN() -> null
-            sitAxes.isNotEmpty() -> {
-                val st = standAxes.minOf { axisAngleDeg(gravity, it) }
-                val si = sitAxes.minOf { axisAngleDeg(gravity, it) }
-                nearestStandDeg = st
-                nearestSitDeg = si
-                match = when {
-                    minOf(st, si) > config.maxMatchDeg -> OrientationMatch.UNMATCHED
-                    kotlin.math.abs(st - si) < config.referenceMarginDeg -> OrientationMatch.AMBIGUOUS
-                    else -> OrientationMatch.OK
-                }
-                when {
-                    match != OrientationMatch.OK -> Posture.UNKNOWN
-                    st < si -> Posture.STANDING
-                    else -> Posture.SITTING
-                }
+            r != null -> when {
+                r.match != OrientationMatch.OK -> Posture.UNKNOWN
+                r.standDeg < r.sitDeg -> Posture.STANDING
+                else -> Posture.SITTING
             }
             tiltDeg <= config.standMaxDeg -> Posture.STANDING
             tiltDeg >= config.sitMinDeg -> Posture.SITTING
